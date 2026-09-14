@@ -21,6 +21,7 @@ after the loop.
 
 from __future__ import annotations
 
+import ctypes
 import subprocess
 import tempfile
 import threading
@@ -43,7 +44,12 @@ from .spectrogram import add_spectrograms_to_frames
 logger = get_logger("recorder")
 
 PREFERRED_VIDEO_LABEL = "c922"
-PREFERRED_AUDIO_LABEL = "jabra"
+# Spec 091: the C922's own built-in mic is the default input now (not
+# Jabra) - picked by the user as the default recording mic. Output
+# (playback) stays on the Jabra speaker; separate constants since
+# there's no reason those two should be forced to match.
+PREFERRED_MIC_LABEL = "c922"
+PREFERRED_SPEAKER_LABEL = "jabra"
 SAMPLE_RATE = 44100
 FRAME_WIDTH = 1280
 FRAME_HEIGHT = 720
@@ -74,6 +80,26 @@ REQUESTED_FOURCC = "MJPG"
 FRAME_FILE_EXTENSION = "bmp"
 
 RECORDINGS_DIR = Path(__file__).resolve().parent.parent / "recordings"
+
+THREAD_PRIORITY_BELOW_NORMAL = -1
+
+
+def lower_current_thread_priority() -> None:
+    """Windows-only best-effort: demotes this thread's OS scheduling
+    priority (spec 091). A new recording is now allowed to start while
+    a previous one's background annotate/spectrogram/encode/cloud-sync
+    is still running (see core.session.LiveSession.start_recording's
+    is_recording-only gate) - this makes that prioritization concrete
+    rather than hoping the GIL happens to interleave favorably: the
+    live capture thread (left at normal priority) gets preferred CPU
+    time over a background worker thread that calls this first, under
+    contention on this machine's weak CPU. Never allowed to break the
+    caller if it fails for any reason."""
+    try:
+        kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+        kernel32.SetThreadPriority(kernel32.GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL)
+    except Exception:
+        logger.warning("lower_current_thread_priority: failed", exc_info=True)
 
 
 @dataclass
@@ -107,9 +133,9 @@ def pick_video_device() -> tuple[int, str]:
 
 
 def pick_audio_device() -> tuple[int | None, str | None]:
-    idx = devices.find_audio_device_index(PREFERRED_AUDIO_LABEL)
+    idx = devices.find_audio_device_index(PREFERRED_MIC_LABEL)
     if idx is None:
-        logger.info("Picked audio input: system default (no %r match found)", PREFERRED_AUDIO_LABEL)
+        logger.info("Picked audio input: system default (no %r match found)", PREFERRED_MIC_LABEL)
         return None, None  # None -> sounddevice's system default input device
     name = sd.query_devices()[idx]["name"]
     logger.info("Picked audio input %d: %r (name match)", idx, name)
@@ -117,9 +143,9 @@ def pick_audio_device() -> tuple[int | None, str | None]:
 
 
 def pick_output_audio_device() -> tuple[int | None, str | None]:
-    idx = devices.find_output_audio_device_index(PREFERRED_AUDIO_LABEL)
+    idx = devices.find_output_audio_device_index(PREFERRED_SPEAKER_LABEL)
     if idx is None:
-        logger.info("Picked audio output: system default (no %r match found)", PREFERRED_AUDIO_LABEL)
+        logger.info("Picked audio output: system default (no %r match found)", PREFERRED_SPEAKER_LABEL)
         return None, None  # None -> sounddevice's system default output device
     name = sd.query_devices()[idx]["name"]
     logger.info("Picked audio output %d: %r (name match)", idx, name)
@@ -207,7 +233,12 @@ def encode_frames_with_audio(
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
-        creationflags=subprocess.CREATE_NO_WINDOW,
+        # BELOW_NORMAL_PRIORITY_CLASS (spec 091): ffmpeg's own CPU usage
+        # (libx264 encoding), not the calling Python thread, is the real
+        # cost here - this lets a newer recording's live capture
+        # preferentially get CPU time from Windows' own scheduler while
+        # an older clip is still encoding in the background.
+        creationflags=subprocess.CREATE_NO_WINDOW | subprocess.BELOW_NORMAL_PRIORITY_CLASS,
     )
     stderr_chunks: list[str] = []
 

@@ -14,6 +14,7 @@ import re
 import threading
 import time
 import tkinter as tk
+import winsound
 from datetime import datetime
 from pathlib import Path
 from tkinter import messagebox, ttk
@@ -35,11 +36,26 @@ logger = get_logger("gui")
 PREVIEW_WIDTH = 480
 DEFAULT_DURATION_S = 10
 PREVIEW_POLL_MS = 10  # self-paced anyway - actual cadence follows the work each tick does
+# Spec 091: a 3-2-1 countdown before capture actually starts, one
+# second per step, with a short beep on each step so the user (who is
+# presumably in front of the camera, not looking at the screen) knows
+# when to get ready without watching the status label.
+COUNTDOWN_SECONDS = 3
+COUNTDOWN_BEEP_FREQ_HZ = 880
+COUNTDOWN_BEEP_MS = 150
 # _tick() runs the whole GUI's live preview/playback loop; one call
 # taking much longer than that is worth a log line (see LiveSession's
 # own, tighter, SLOW_FRAME_WARN_THRESHOLD_S for the read_frame()-level
 # version of this same idea).
 SLOW_TICK_WARN_THRESHOLD_S = 1.0
+# Spec 091: when maximized ("zoomed" is Tk's name for it on Windows -
+# there's no separate true-fullscreen mode in use here), the recordings
+# list moves to a tall column on the right instead of a short list
+# below everything else, using the extra width a maximized window has
+# to spare. RIGHT_COLUMN_WIDTH is fixed (not just a minimum) via
+# pack_propagate(False) below - a Treeview's own requested width would
+# otherwise vary with its content/columns.
+RIGHT_COLUMN_WIDTH = 340
 
 _FILENAME_TIMESTAMP_RE = re.compile(r"shot-improvement-(\d{14})(?:-annotated)?\.mp4$")
 
@@ -87,20 +103,37 @@ class App:
         self._background_remover: Optional[BackgroundRemover] = None  # lazy - model load is slow, reused after first use
         self._segmenting = False  # a background-removal worker thread is currently running
         self._photo_image = None  # keep a reference alive - Tkinter/PhotoImage gotcha
+        self._counting_down = False  # the 3-2-1 countdown is running, before actual capture starts
+        self._window_state = root.state()
 
-        self._build_device_row(root)
+        # Spec 091: left_frame holds everything except the recordings
+        # list (camera/device controls, preview, record button,
+        # playback controls, status) - right_frame holds only the
+        # recordings list. Built as two separate containers (rather
+        # than everything packed straight into root) specifically so
+        # _apply_layout() can rearrange them - stacked vertically
+        # normally, side by side with a tall list on the right once the
+        # window is maximized.
+        main = ttk.Frame(root)
+        main.pack(fill="both", expand=True)
+        self.left_frame = ttk.Frame(main)
+        self.right_frame = ttk.Frame(main)
 
-        self.preview_label = tk.Label(root, background="#000")
+        self._build_device_row(self.left_frame)
+
+        self.preview_label = tk.Label(self.left_frame, background="#000")
         self.preview_label.pack(padx=8, pady=8)
 
-        self._build_record_row(root)
-        self._build_playback_controls(root)
+        self._build_record_row(self.left_frame)
+        self._build_playback_controls(self.left_frame)
 
         self.status_var = tk.StringVar(value="Käynnistetään kameraa…")
-        self.status_label = ttk.Label(root, textvariable=self.status_var)
+        self.status_label = ttk.Label(self.left_frame, textvariable=self.status_var)
         self.status_label.pack(pady=(0, 8))
 
-        self._build_list(root)
+        self._build_list(self.right_frame)
+        self._apply_layout()
+        root.bind("<Configure>", self._on_root_configure)
 
         self._video_paths: list[Path] = []
         self.refresh_recordings()
@@ -249,6 +282,32 @@ class App:
         ttk.Button(button_row, text="Toista", command=self.on_play_selected).pack(side="left", padx=4)
         ttk.Button(button_row, text="Poista", command=self.on_delete_selected).pack(side="left", padx=4)
 
+    def _apply_layout(self) -> None:
+        """Stacked (left_frame above right_frame, both full width) when
+        the window is a normal size; side by side, right_frame a fixed
+        tall column, once maximized. Only called when self._window_state
+        actually changes (see _on_root_configure) - repacking on every
+        resize event would be wasteful and isn't needed."""
+        self.left_frame.pack_forget()
+        self.right_frame.pack_forget()
+        self.right_frame.pack_propagate(False)
+        if self._window_state == "zoomed":
+            self.right_frame.configure(width=RIGHT_COLUMN_WIDTH)
+            self.left_frame.pack(side="left", fill="both", expand=True)
+            self.right_frame.pack(side="right", fill="y")
+        else:
+            self.left_frame.pack(fill="both", expand=True)
+            self.right_frame.pack(fill="both", expand=True)
+
+    def _on_root_configure(self, event: tk.Event) -> None:
+        if event.widget is not self.root:
+            return
+        state = self.root.state()
+        if state != self._window_state:
+            logger.info("Window state changed: %r -> %r", self._window_state, state)
+            self._window_state = state
+            self._apply_layout()
+
     # --- session / device setup ---------------------------------------
 
     def _init_session(self) -> None:
@@ -384,18 +443,20 @@ class App:
         if frame is not None and not self.session.is_recording:
             self._show_frame(frame)
 
-        button_shows_busy = self.record_button["state"] == "disabled"
-        if self.session.is_recording and not button_shows_busy:
-            self.record_button.config(state="disabled")
-            self.status_var.set(f"Nauhoitetaan {self.duration_var.get()} sekuntia…")
-        elif self.session.is_busy and not self.session.is_recording and self.status_var.get().startswith("Nauhoitetaan"):
+        # Spec 091: the record button is disabled at the moment the 3-2-1
+        # countdown starts (on_record_click) and the "Nauhoitetaan..."
+        # status is set directly once capture actually begins (see
+        # _run_countdown) - both used to be detected here indirectly via
+        # button/status-text state, which broke once the countdown made
+        # the button already disabled before is_recording turned True.
+        if self.session.is_busy and not self.session.is_recording and self.status_var.get() == "Tallennus käynnistyi":
             # Capture just finished, encoding continues in the
             # background (session.close/other actions stay blocked via
             # is_busy) - the camera/preview are already back to normal
-            # speed at this point, only the button stays disabled. Just a
-            # placeholder for the brief gap before the first on_progress
-            # callback (see _on_recording_progress) replaces it with a
-            # per-stage percentage.
+            # speed at this point. Just a placeholder for the brief gap
+            # before the first on_progress callback (see
+            # _on_recording_progress) replaces it with a per-stage
+            # percentage.
             self.status_var.set("Käsitellään tallennetta…")
 
     def _show_frame(self, frame) -> None:
@@ -410,8 +471,17 @@ class App:
 
     def on_record_click(self) -> None:
         logger.info("User clicked Tallenna")
-        if self.session is None or self.session.is_busy or self._mode == "playback":
-            logger.info("on_record_click: ignored (session=%s busy=%s mode=%r)", self.session is not None, self.session.is_busy if self.session else None, self._mode)
+        # Spec 091: gates on is_recording, not is_busy - a previous
+        # clip's background annotate/spectrogram/encode/sync is allowed
+        # to still be running (see LiveSession.start_recording); only
+        # actual capture (this clip's own, or a countdown about to
+        # become one) blocks starting another.
+        if self.session is None or self.session.is_recording or self._counting_down or self._mode == "playback":
+            logger.info(
+                "on_record_click: ignored (session=%s recording=%s counting_down=%s mode=%r)",
+                self.session is not None, self.session.is_recording if self.session else None,
+                self._counting_down, self._mode,
+            )
             return
         try:
             duration_s = float(self.duration_var.get())
@@ -421,37 +491,84 @@ class App:
         self.duration_var.set(str(duration_s if duration_s % 1 else int(duration_s)))
 
         self.record_button.config(state="disabled")
-        self.status_var.set(f"Nauhoitetaan {duration_s:g} sekuntia…")
+        self._counting_down = True
+        self._run_countdown(duration_s, COUNTDOWN_SECONDS)
+
+    def _run_countdown(self, duration_s: float, seconds_left: int) -> None:
+        if seconds_left > 0:
+            self.status_var.set(f"Tallennus alkaa: {seconds_left}..")
+            self._play_beep()
+            self.root.after(1000, lambda: self._run_countdown(duration_s, seconds_left - 1))
+            return
+        self._counting_down = False
+        self.status_var.set("Tallennus käynnistyi")
         self.session.start_recording(
             duration_s, RECORDINGS_DIR, self._on_recording_done,
             dispatch=lambda fn: self.root.after(0, fn),
             on_progress=self._on_recording_progress,
+            on_raw_ready=self._on_raw_ready,
         )
 
+    @staticmethod
+    def _play_beep() -> None:
+        # winsound.Beep() blocks for its full duration - run it on its
+        # own short-lived thread so the countdown's own 1s Tkinter
+        # timing (and the live preview tick) never stalls waiting on it.
+        threading.Thread(
+            target=lambda: winsound.Beep(COUNTDOWN_BEEP_FREQ_HZ, COUNTDOWN_BEEP_MS),
+            name="shot-improvement-beep", daemon=True,
+        ).start()
+
+    def _set_status_if_idle(self, text: str) -> None:
+        # Spec 091: a previous clip's background work (its own progress,
+        # sync status) can now finish while a NEWER recording's own
+        # countdown or active capture is on screen - that newer, more
+        # relevant status must never be clobbered by an older clip's
+        # background-thread callback firing at an inconvenient moment.
+        if self._counting_down or (self.session is not None and self.session.is_recording):
+            return
+        self.status_var.set(text)
+
     def _on_recording_progress(self, stage: str, fraction: float) -> None:
-        self.status_var.set(f"{stage}: {fraction * 100:.0f} %")
+        self._set_status_if_idle(f"{stage}: {fraction * 100:.0f} %")
+
+    def _on_raw_ready(self, raw_path: Path) -> None:
+        # Spec 091: the raw clip is already a finished, playable file at
+        # this point (annotate/spectrogram/encode(annotated)/cloud sync
+        # for it continue in the background) - shown in the list and the
+        # record button re-enabled immediately, rather than waiting for
+        # the rest of that pipeline, so a new recording is never blocked
+        # behind a previous one's background work.
+        logger.info("_on_raw_ready: %s", raw_path.name)
+        self.record_button.config(state="normal")
+        self.refresh_recordings()
 
     def _on_recording_done(self, result: Optional[RecordingResult]) -> None:
-        self.record_button.config(state="normal")
         if result is None:
             logger.warning("_on_recording_done: recording failed")
+            # _on_raw_ready never fired for this clip (zero frames means
+            # no encode ever ran) - the button is still disabled from
+            # on_record_click, and nothing newer could have started
+            # since a real click can't reach a disabled button. Safe to
+            # unconditionally re-enable, unlike the success path below.
+            self.record_button.config(state="normal")
             self.status_var.set("Nauhoitus epäonnistui (ei kuvia kamerasta).")
             return
         logger.info("_on_recording_done: %s (%d frames, %.1f fps)", result.raw_path.name, result.frame_count, result.actual_fps)
         saved_msg = f"Tallennettu ({result.frame_count} kuvaa, {result.actual_fps:.1f} fps)."
-        self.status_var.set(f"{saved_msg} Synkronoidaan verkkoon…")
+        self._set_status_if_idle(f"{saved_msg} Synkronoidaan verkkoon…")
         self.refresh_recordings()
 
         def on_sync_done(exc: Optional[Exception]) -> None:
             if exc is not None:
                 logger.warning("Cloud upload failed for %s: %s", result.annotated_path.name, exc)
-                self.status_var.set(f"{saved_msg} Synkronointi epäonnistui: {exc}")
+                self._set_status_if_idle(f"{saved_msg} Synkronointi epäonnistui: {exc}")
             else:
-                self.status_var.set(f"{saved_msg} Synkronoitu verkkoon.")
+                self._set_status_if_idle(f"{saved_msg} Synkronoitu verkkoon.")
 
         def on_sync_progress(bytes_sent: int, total_bytes: int) -> None:
             percent = (bytes_sent / total_bytes * 100) if total_bytes else 100.0
-            self.status_var.set(f"{saved_msg} Synkronoidaan verkkoon: {percent:.0f} %")
+            self._set_status_if_idle(f"{saved_msg} Synkronoidaan verkkoon: {percent:.0f} %")
 
         self._sync_worker.upload_recording(result.annotated_path, on_done=on_sync_done, on_progress=on_sync_progress)
 

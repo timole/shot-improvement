@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from .log_setup import get_logger
-from .recorder import RECORDINGS_DIR
+from .recorder import RECORDINGS_DIR, lower_current_thread_priority
 
 logger = get_logger("cloud_sync")
 
@@ -173,6 +173,10 @@ class SyncWorker:
         self._queue.put(("delete", name, on_done, None))
 
     def _run(self) -> None:
+        # Spec 091: same reasoning as core.session's encode worker - a
+        # recording's live capture should get CPU/network scheduling
+        # preference over this background sync work, not compete evenly.
+        lower_current_thread_priority()
         while True:
             action, arg, on_done, on_progress = self._queue.get()
             exc: Optional[Exception] = None

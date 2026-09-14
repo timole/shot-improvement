@@ -61,3 +61,4 @@ verified how, and any criterion that had to change and why.
 | [088](088-shot-improvement-60fps-720p.md) | Shot-improvement real 60fps capture at 1280x720 (fixed camera device match + MJPG negotiation) | Done |
 | [089](089-shot-improvement-gui-recording-throughput.md) | Shot-improvement GUI recording throughput (skip live preview + tick pacing while recording) + no console windows during ffmpeg | Done |
 | [090](090-shot-improvement-progress-percentages.md) | Shot-improvement progress percentages for annotating, spectrogram, ffmpeg encoding, and cloud upload (+ a real ffmpeg stdout/stderr pipe deadlock fix found along the way) | Done |
+| [091](091-shot-improvement-countdown-priority-layout.md) | Shot-improvement countdown+beep before recording, default C922 mic, new-recording-shown-immediately + prioritized over old background work, fullscreen tall recordings list | Done |

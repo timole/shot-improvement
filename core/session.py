@@ -33,6 +33,7 @@ from .recorder import (
     FRAME_WIDTH,
     SAMPLE_RATE,
     encode_frames_with_audio,
+    lower_current_thread_priority,
     open_camera,
     pick_audio_device,
     pick_output_audio_device,
@@ -89,9 +90,15 @@ class LiveSession:
         self._audio_buffer: Optional[np.ndarray] = None
         self._on_recording_done: Optional[Callable[[Optional[RecordingResult]], None]] = None
         self._consecutive_read_failures = 0
-        self._encoding = False
+        # Spec 091: a count, not a bool - a new recording can now start
+        # (see start_recording()) while an older one's background worker
+        # is still running, so more than one can be in flight at once.
+        # is_busy must stay True until the LAST of them finishes, not
+        # whichever happens to finish first.
+        self._encoding_count = 0
         self._dispatch: Callable[[Callable[[], None]], None] = lambda fn: fn()
         self._on_progress: Callable[[str, float], None] = lambda stage, fraction: None
+        self._on_raw_ready: Callable[[Path], None] = lambda raw_path: None
 
         logger.info(
             "LiveSession started: video=%r audio=%r output=%r",
@@ -104,12 +111,13 @@ class LiveSession:
 
     @property
     def is_busy(self) -> bool:
-        """True while actively capturing OR while a previous clip is
-        still encoding in the background - starting a second recording
-        while the first is still encoding would just make both compete
-        for this machine's limited CPU. Camera switching etc. only care
-        about is_recording (capture), not encoding."""
-        return self._recording or self._encoding
+        """True while actively capturing OR while at least one previous
+        clip is still encoding in the background (spec 091: more than
+        one can be in flight - see _encoding_count). Used to gate
+        actions that shouldn't run concurrently with any of that (e.g.
+        playback, camera close) - starting a NEW recording is
+        deliberately not gated on this, see start_recording()."""
+        return self._recording or self._encoding_count > 0
 
     def camera_info(self) -> tuple[int, int, float]:
         """Real, negotiated (width, height, fps) - never assumed."""
@@ -167,6 +175,7 @@ class LiveSession:
         on_done: Callable[[Optional[RecordingResult]], None],
         dispatch: Callable[[Callable[[], None]], None] = lambda fn: fn(),
         on_progress: Callable[[str, float], None] = lambda stage, fraction: None,
+        on_raw_ready: Callable[[Path], None] = lambda raw_path: None,
     ) -> None:
         """dispatch, if given, is used to run on_done back on whatever
         thread called start_recording (e.g. Tkinter's root.after(0, fn))
@@ -176,11 +185,26 @@ class LiveSession:
         on_progress(stage_label, fraction), if given, is called (also via
         dispatch) many times during the background worker's post-capture
         steps (spec 090) - annotating, adding the spectrogram, and each
-        of the two ffmpeg encodes."""
-        if self.is_busy:
+        of the two ffmpeg encodes.
+
+        on_raw_ready(raw_path), if given, is called (also via dispatch)
+        once the RAW clip alone has finished encoding - well before the
+        rest of the pipeline (annotate/spectrogram/encode the annotated
+        copy/cloud sync) completes (spec 091). The GUI uses this to show
+        the new recording in its list and re-enable the record button
+        immediately, rather than waiting for on_done.
+
+        Gated on is_recording, not is_busy: a previous clip's background
+        work (annotate/spectrogram/encode/sync) is deliberately allowed
+        to still be running when this is called - see
+        _start_finish_recording's _lower_current_thread_priority() call,
+        which exists specifically so that background work doesn't starve
+        THIS new capture of CPU. Only actual capture blocks a new one."""
+        if self._recording:
             return
         self._dispatch = dispatch
         self._on_progress = on_progress
+        self._on_raw_ready = on_raw_ready
         # A PoseDetector reused continuously across a long idle-preview
         # session (minutes of frames, possibly a prior recording too)
         # was observed to silently stop detecting mid-recording, even
@@ -273,23 +297,29 @@ class LiveSession:
         # Capture (this app's per-frame throughput bottleneck: pose
         # inference + disk writes) is done the moment this is called -
         # self._recording flips off immediately so the camera/live
-        # preview keep running at full speed. Encoding (ffmpeg, twice)
-        # runs on a background thread instead of blocking read_frame()'s
-        # caller: a real ~12s camera stall was observed and confirmed
-        # via logging when this ran synchronously on the GUI's own tick
-        # loop - encoding two clips (bigger now that the default
-        # duration is 10s, not 3s) starved the camera of CPU for that
-        # whole time. self.is_busy stays true until encoding finishes,
-        # so a second recording can't start and compete with it for
-        # this machine's limited CPU.
+        # preview keep running at full speed, AND so a new recording is
+        # free to start (see start_recording()'s gate). Encoding (ffmpeg,
+        # twice) runs on a background thread instead of blocking
+        # read_frame()'s caller: a real ~12s camera stall was observed
+        # and confirmed via logging when this ran synchronously on the
+        # GUI's own tick loop.
+        #
+        # Spec 091: a NEW recording is now allowed to start while this
+        # worker is still running (is_busy is a count, not a bool - see
+        # _encoding_count) - unlike before, this is deliberate: the user
+        # asked for a new recording to be prioritized over an older one's
+        # background work, not blocked behind it. worker() lowers its own
+        # thread priority (see _lower_current_thread_priority) so that
+        # prioritization is real, not just hopeful GIL interleaving.
         self._recording = False
-        self._encoding = True
+        self._encoding_count += 1
         elapsed_s = time.monotonic() - self._record_start
         frame_count = self._record_frame_count
         tmp_dir = self._tmp_dir
         raw_dir, annotated_dir, out_dir = self._raw_dir, self._annotated_dir, self._out_dir
         audio_buffer = self._audio_buffer
         on_done = self._on_recording_done
+        on_raw_ready = self._on_raw_ready
         dispatch = self._dispatch
         on_progress = self._on_progress
         logger.info("finish_recording: %d frames in %.2fs, encoding in background", frame_count, elapsed_s)
@@ -303,6 +333,7 @@ class LiveSession:
             )
 
         def worker() -> None:
+            lower_current_thread_priority()
             sd.wait()
             result: Optional[RecordingResult] = None
             try:
@@ -316,6 +347,18 @@ class LiveSession:
                     timestamp = timestamp_for_filename(datetime.now())
                     raw_out = out_dir / f"shot-improvement-{timestamp}.mp4"
                     annotated_out = out_dir / f"shot-improvement-{timestamp}-annotated.mp4"
+                    # Spec 091: the raw clip needs no pose annotation at
+                    # all, so it's encoded FIRST and handed to
+                    # on_raw_ready immediately - the GUI shows it in the
+                    # recordings list and re-enables the record button
+                    # right away, well before the slower annotate/
+                    # spectrogram/encode-annotated/cloud-sync steps below
+                    # even start.
+                    encode_frames_with_audio(
+                        raw_dir, audio_tmp, raw_out, actual_fps, frame_count,
+                        on_progress=report("Tallennetaan levylle (raaka)"),
+                    )
+                    dispatch(lambda: on_raw_ready(raw_out))
                     # Spec 085: annotated-only, 640x480 -> 640x960 - see
                     # core.spectrogram's module docstring for why this
                     # runs here (background encode thread) rather than
@@ -334,10 +377,6 @@ class LiveSession:
                         on_progress=report("Lisätään spektrogrammi"),
                     )
                     encode_frames_with_audio(
-                        raw_dir, audio_tmp, raw_out, actual_fps, frame_count,
-                        on_progress=report("Tallennetaan levylle (raaka)"),
-                    )
-                    encode_frames_with_audio(
                         annotated_dir, audio_tmp, annotated_out, actual_fps, frame_count,
                         on_progress=report("Tallennetaan levylle"),
                     )
@@ -352,7 +391,7 @@ class LiveSession:
                 result = None
             finally:
                 tmp_dir.cleanup()
-                self._encoding = False
+                self._encoding_count -= 1
                 if on_done:
                     dispatch(lambda: on_done(result))
 
