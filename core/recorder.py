@@ -175,6 +175,11 @@ def encode_frames_with_audio(frames_dir: Path, audio_path: Path, out_path: Path,
             ],
             check=True,
             capture_output=True,
+            # Without this, each ffmpeg invocation briefly flashes its
+            # own console window - subprocess.run() on Windows opens one
+            # by default for a console-subsystem child process, even
+            # though this app itself runs windowless under pythonw.exe.
+            creationflags=subprocess.CREATE_NO_WINDOW,
         )
     except subprocess.CalledProcessError as exc:
         logger.error("ffmpeg encode of %s failed (exit %d): %s", out_path.name, exc.returncode, exc.stderr.decode("utf-8", "replace")[-2000:])

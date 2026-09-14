@@ -356,13 +356,32 @@ class App:
             elapsed = time.monotonic() - start
             if elapsed > SLOW_TICK_WARN_THRESHOLD_S:
                 logger.warning("_tick: took %.2fs (mode=%r)", elapsed, self._mode)
-            self.root.after(PREVIEW_POLL_MS, self._tick)
+            # While recording, reschedule with after_idle (no fixed
+            # delay) instead of PREVIEW_POLL_MS - that 10ms pacing exists
+            # to avoid redrawing the live preview faster than needed, but
+            # during recording there's no redraw (_live_tick skips it),
+            # and the flat 10ms added on top of each frame's real
+            # capture time was itself capping throughput well below what
+            # a tight loop reaches (measured: ~45fps vs ~58fps at
+            # 1280x720 on this camera).
+            if self.session is not None and self.session.is_recording:
+                self.root.after_idle(self._tick)
+            else:
+                self.root.after(PREVIEW_POLL_MS, self._tick)
 
     def _live_tick(self) -> None:
         if self.session is None:
             return
         frame = self.session.read_frame()
-        if frame is not None:
+        # Skip the display update while a recording is in progress -
+        # cv2.cvtColor + PIL resize + PhotoImage/Tkinter update is real
+        # per-frame CPU cost with nothing to do with capturing, and at
+        # 1280x720 it was measured to cap real captured fps around 16-17
+        # instead of the ~58 the same camera/pipeline reaches headless
+        # (core.recorder.record_clip, no GUI). The last live frame just
+        # stays on screen for the recording's duration; the status label
+        # already says "Nauhoitetaan...".
+        if frame is not None and not self.session.is_recording:
             self._show_frame(frame)
 
         button_shows_busy = self.record_button["state"] == "disabled"

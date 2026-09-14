@@ -69,6 +69,7 @@ def extract_audio(path: Path) -> tuple[Optional[np.ndarray], Optional[int]]:
                 [ffmpeg_exe, "-y", "-i", str(path), "-vn", str(wav_path)],
                 check=True,
                 capture_output=True,
+                creationflags=subprocess.CREATE_NO_WINDOW,
             )
             return sf.read(wav_path)
     except Exception:
