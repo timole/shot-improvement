@@ -21,7 +21,7 @@ native resolution, per explicit request.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 import cv2
 import numpy as np
@@ -80,12 +80,20 @@ def with_playhead(spectrogram: np.ndarray, x_fraction: float) -> np.ndarray:
 
 
 def add_spectrograms_to_frames(
-    frames_dir: Path, audio: Optional[np.ndarray], frame_count: int, extension: str, width: int
+    frames_dir: Path,
+    audio: Optional[np.ndarray],
+    frame_count: int,
+    extension: str,
+    width: int,
+    on_progress: Optional[Callable[[int, int], None]] = None,
 ) -> bool:
     """Rewrites each frame_%06d.<extension> in frames_dir in place,
     stacking [original frame; spectrogram-with-playhead] to double its
     height. Returns False (leaving frames untouched) if there's no
-    audio to render."""
+    audio to render.
+
+    on_progress(done, total), if given, is called after each frame -
+    same convention as core.pose.annotate_frames_dir (spec 090)."""
     if audio is None or frame_count == 0 or len(audio) == 0:
         logger.warning("add_spectrograms_to_frames: no audio, skipping (frame_count=%d)", frame_count)
         return False
@@ -94,12 +102,13 @@ def add_spectrograms_to_frames(
     for i in range(frame_count):
         path = frames_dir / f"frame_{i:06d}.{extension}"
         frame = cv2.imread(str(path))
-        if frame is None:
-            continue
-        x_fraction = i / max(frame_count - 1, 1)
-        panel = with_playhead(spectrogram, x_fraction)
-        composite = np.vstack([frame, panel])
-        cv2.imwrite(str(path), composite)
+        if frame is not None:
+            x_fraction = i / max(frame_count - 1, 1)
+            panel = with_playhead(spectrogram, x_fraction)
+            composite = np.vstack([frame, panel])
+            cv2.imwrite(str(path), composite)
+        if on_progress:
+            on_progress(i + 1, frame_count)
 
     logger.info("add_spectrograms_to_frames: composited %d frames in %s", frame_count, frames_dir)
     return True

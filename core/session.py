@@ -91,6 +91,7 @@ class LiveSession:
         self._consecutive_read_failures = 0
         self._encoding = False
         self._dispatch: Callable[[Callable[[], None]], None] = lambda fn: fn()
+        self._on_progress: Callable[[str, float], None] = lambda stage, fraction: None
 
         logger.info(
             "LiveSession started: video=%r audio=%r output=%r",
@@ -165,14 +166,21 @@ class LiveSession:
         out_dir: Path,
         on_done: Callable[[Optional[RecordingResult]], None],
         dispatch: Callable[[Callable[[], None]], None] = lambda fn: fn(),
+        on_progress: Callable[[str, float], None] = lambda stage, fraction: None,
     ) -> None:
         """dispatch, if given, is used to run on_done back on whatever
         thread called start_recording (e.g. Tkinter's root.after(0, fn))
         - encoding happens on a background thread (see _finish_recording),
-        so on_done must never touch GUI widgets directly from there."""
+        so on_done must never touch GUI widgets directly from there.
+
+        on_progress(stage_label, fraction), if given, is called (also via
+        dispatch) many times during the background worker's post-capture
+        steps (spec 090) - annotating, adding the spectrogram, and each
+        of the two ffmpeg encodes."""
         if self.is_busy:
             return
         self._dispatch = dispatch
+        self._on_progress = on_progress
         # A PoseDetector reused continuously across a long idle-preview
         # session (minutes of frames, possibly a prior recording too)
         # was observed to silently stop detecting mid-recording, even
@@ -283,7 +291,16 @@ class LiveSession:
         audio_buffer = self._audio_buffer
         on_done = self._on_recording_done
         dispatch = self._dispatch
+        on_progress = self._on_progress
         logger.info("finish_recording: %d frames in %.2fs, encoding in background", frame_count, elapsed_s)
+
+        def report(stage: str) -> Callable[[int, int], None]:
+            # Dispatched (not called directly) - runs on the GUI thread,
+            # same as on_done, since on_progress ends up touching a
+            # Tkinter status label.
+            return lambda done, total: dispatch(
+                lambda: on_progress(stage, done / total if total else 1.0)
+            )
 
         def worker() -> None:
             sd.wait()
@@ -308,10 +325,22 @@ class LiveSession:
                     # docstring - must run before the spectrogram is
                     # composited in, since that permanently changes the
                     # annotated frame's size.
-                    annotate_frames_dir(raw_dir, annotated_dir, FRAME_FILE_EXTENSION, actual_fps)
-                    add_spectrograms_to_frames(annotated_dir, audio_buffer, frame_count, FRAME_FILE_EXTENSION, width=FRAME_WIDTH)
-                    encode_frames_with_audio(raw_dir, audio_tmp, raw_out, actual_fps)
-                    encode_frames_with_audio(annotated_dir, audio_tmp, annotated_out, actual_fps)
+                    annotate_frames_dir(
+                        raw_dir, annotated_dir, FRAME_FILE_EXTENSION, actual_fps,
+                        on_progress=report("Tunnistetaan käsien asentoja"),
+                    )
+                    add_spectrograms_to_frames(
+                        annotated_dir, audio_buffer, frame_count, FRAME_FILE_EXTENSION, width=FRAME_WIDTH,
+                        on_progress=report("Lisätään spektrogrammi"),
+                    )
+                    encode_frames_with_audio(
+                        raw_dir, audio_tmp, raw_out, actual_fps, frame_count,
+                        on_progress=report("Tallennetaan levylle (raaka)"),
+                    )
+                    encode_frames_with_audio(
+                        annotated_dir, audio_tmp, annotated_out, actual_fps, frame_count,
+                        on_progress=report("Tallennetaan levylle"),
+                    )
                     result = RecordingResult(raw_out, annotated_out, frame_count, actual_fps)
                     logger.info("finish_recording: done -> %s / %s", raw_out.name, annotated_out.name)
             except Exception:

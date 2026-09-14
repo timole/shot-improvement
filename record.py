@@ -24,9 +24,12 @@ def main() -> None:
         sys.stdout.reconfigure(encoding="utf-8")
         sys.stderr.reconfigure(encoding="utf-8")
 
+    def on_progress(stage: str, fraction: float) -> None:
+        print(f"\r{stage}: {fraction * 100:.0f}%" + (" " * 10 if fraction >= 1.0 else ""), end="\n" if fraction >= 1.0 else "", flush=True)
+
     duration = float(sys.argv[1]) if len(sys.argv) > 1 else 3.0
     try:
-        result = record_clip(duration_s=duration, on_status=print)
+        result = record_clip(duration_s=duration, on_status=print, on_progress=on_progress)
     except Exception as exc:
         logger.exception("CLI record_clip failed")
         print(f"Nauhoitus epäonnistui: {exc}", file=sys.stderr)

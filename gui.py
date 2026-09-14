@@ -392,8 +392,11 @@ class App:
             # Capture just finished, encoding continues in the
             # background (session.close/other actions stay blocked via
             # is_busy) - the camera/preview are already back to normal
-            # speed at this point, only the button stays disabled.
-            self.status_var.set("Tallennetaan levylle…")
+            # speed at this point, only the button stays disabled. Just a
+            # placeholder for the brief gap before the first on_progress
+            # callback (see _on_recording_progress) replaces it with a
+            # per-stage percentage.
+            self.status_var.set("Käsitellään tallennetta…")
 
     def _show_frame(self, frame) -> None:
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -420,8 +423,13 @@ class App:
         self.record_button.config(state="disabled")
         self.status_var.set(f"Nauhoitetaan {duration_s:g} sekuntia…")
         self.session.start_recording(
-            duration_s, RECORDINGS_DIR, self._on_recording_done, dispatch=lambda fn: self.root.after(0, fn)
+            duration_s, RECORDINGS_DIR, self._on_recording_done,
+            dispatch=lambda fn: self.root.after(0, fn),
+            on_progress=self._on_recording_progress,
         )
+
+    def _on_recording_progress(self, stage: str, fraction: float) -> None:
+        self.status_var.set(f"{stage}: {fraction * 100:.0f} %")
 
     def _on_recording_done(self, result: Optional[RecordingResult]) -> None:
         self.record_button.config(state="normal")
@@ -441,7 +449,11 @@ class App:
             else:
                 self.status_var.set(f"{saved_msg} Synkronoitu verkkoon.")
 
-        self._sync_worker.upload_recording(result.annotated_path, on_done=on_sync_done)
+        def on_sync_progress(bytes_sent: int, total_bytes: int) -> None:
+            percent = (bytes_sent / total_bytes * 100) if total_bytes else 100.0
+            self.status_var.set(f"{saved_msg} Synkronoidaan verkkoon: {percent:.0f} %")
+
+        self._sync_worker.upload_recording(result.annotated_path, on_done=on_sync_done, on_progress=on_sync_progress)
 
     def _on_sync_reconciled(self, exc: Optional[Exception]) -> None:
         if exc is not None:

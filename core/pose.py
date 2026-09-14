@@ -12,7 +12,7 @@ from __future__ import annotations
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
+from typing import Callable, Optional, Sequence
 
 import cv2
 import mediapipe as mp
@@ -129,7 +129,13 @@ class PoseDetector:
         self.close()
 
 
-def annotate_frames_dir(raw_dir: Path, annotated_dir: Path, extension: str, fps: float) -> None:
+def annotate_frames_dir(
+    raw_dir: Path,
+    annotated_dir: Path,
+    extension: str,
+    fps: float,
+    on_progress: Optional[Callable[[int, int], None]] = None,
+) -> None:
     """Runs pose detection over an already-captured sequence of raw
     frame files and writes palm-box-annotated copies into annotated_dir
     (same filenames).
@@ -142,17 +148,27 @@ def annotate_frames_dir(raw_dir: Path, annotated_dir: Path, extension: str, fps:
     a pass over already-saved files, run after capture ends where
     speed no longer matters as much - lets the capture loop do only a
     camera read + one disk write per frame, capturing far more frames
-    per second of real time (confirmed live - see spec 086)."""
+    per second of real time (confirmed live - see spec 086).
+
+    on_progress(done, total), if given, is called after each frame - the
+    GUI uses this to show a percentage while this pass runs (spec 090),
+    which on this hardware is slow enough (~57ms/frame) to be worth
+    showing progress for rather than a single static status line."""
     frame_paths = sorted(raw_dir.glob(f"*.{extension}"))
+    total = len(frame_paths)
     if not frame_paths:
         return
     with PoseDetector() as detector:
         for i, path in enumerate(frame_paths):
             frame = cv2.imread(str(path))
             if frame is None:
+                if on_progress:
+                    on_progress(i + 1, total)
                 continue
             ts_ms = int(i * 1000 / fps) if fps > 0 else i
             boxes = detector.detect(frame, ts_ms)
             annotated = frame.copy()
             draw_palm_boxes(annotated, boxes)
             cv2.imwrite(str(annotated_dir / path.name), annotated)
+            if on_progress:
+                on_progress(i + 1, total)

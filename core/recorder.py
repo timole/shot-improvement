@@ -23,10 +23,12 @@ from __future__ import annotations
 
 import subprocess
 import tempfile
+import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import Callable, Optional
 
 import cv2
 import imageio_ffmpeg
@@ -158,32 +160,82 @@ def open_camera(index: int) -> cv2.VideoCapture:
     return cap
 
 
-def encode_frames_with_audio(frames_dir: Path, audio_path: Path, out_path: Path, actual_fps: float) -> None:
+def encode_frames_with_audio(
+    frames_dir: Path,
+    audio_path: Path,
+    out_path: Path,
+    actual_fps: float,
+    frame_count: int,
+    on_progress: Optional[Callable[[int, int], None]] = None,
+) -> None:
+    """on_progress(done, total), if given, is called as ffmpeg reports
+    its own encoded frame count (spec 090) - `-progress pipe:1` writes
+    machine-readable `frame=N` lines to stdout; `-nostats` turns off
+    the human-readable per-frame line ffmpeg would otherwise write to
+    stderr instead (redundant here, and stderr is reserved below for
+    real error output only). `-stats_period 0.1` asks for updates every
+    100ms rather than the 0.5s default - this app's clips are only a
+    few seconds long, so the default cadence would give very few
+    updates to show.
+
+    Deliberately not `-loglevel error` (quiets stdout too on some
+    ffmpeg builds' `-progress` interaction) - default verbosity's
+    banner + libx264 param dump can be a few KB on stderr, comfortably
+    past a pipe's OS buffer (observed hanging both encode calls, since
+    this app runs two per recording, back to back) if nothing drains it
+    while this function is busy reading stdout instead - a dedicated
+    thread below drains stderr into a bounded buffer concurrently, so
+    ffmpeg is never left blocked trying to write to a full pipe while
+    this function waits on stdout."""
     ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
-    try:
-        subprocess.run(
-            [
-                ffmpeg_exe, "-y",
-                "-framerate", f"{actual_fps:.3f}",
-                "-i", str(frames_dir / f"frame_%06d.{FRAME_FILE_EXTENSION}"),
-                "-i", str(audio_path),
-                "-c:v", "libx264",
-                "-pix_fmt", "yuv420p",
-                "-c:a", "aac",
-                "-shortest",
-                str(out_path),
-            ],
-            check=True,
-            capture_output=True,
-            # Without this, each ffmpeg invocation briefly flashes its
-            # own console window - subprocess.run() on Windows opens one
-            # by default for a console-subsystem child process, even
-            # though this app itself runs windowless under pythonw.exe.
-            creationflags=subprocess.CREATE_NO_WINDOW,
-        )
-    except subprocess.CalledProcessError as exc:
-        logger.error("ffmpeg encode of %s failed (exit %d): %s", out_path.name, exc.returncode, exc.stderr.decode("utf-8", "replace")[-2000:])
-        raise
+    cmd = [
+        ffmpeg_exe, "-y",
+        "-framerate", f"{actual_fps:.3f}",
+        "-i", str(frames_dir / f"frame_%06d.{FRAME_FILE_EXTENSION}"),
+        "-i", str(audio_path),
+        "-c:v", "libx264",
+        "-pix_fmt", "yuv420p",
+        "-c:a", "aac",
+        "-shortest",
+        "-nostats",
+        "-progress", "pipe:1",
+        "-stats_period", "0.1",
+        str(out_path),
+    ]
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        creationflags=subprocess.CREATE_NO_WINDOW,
+    )
+    stderr_chunks: list[str] = []
+
+    def drain_stderr() -> None:
+        assert proc.stderr is not None
+        for line in proc.stderr:
+            stderr_chunks.append(line)
+
+    stderr_thread = threading.Thread(target=drain_stderr, name="ffmpeg-stderr-drain", daemon=True)
+    stderr_thread.start()
+
+    assert proc.stdout is not None
+    for line in proc.stdout:
+        line = line.strip()
+        if line.startswith("frame=") and on_progress and frame_count > 0:
+            try:
+                frame_n = int(line.split("=", 1)[1])
+            except ValueError:
+                continue
+            on_progress(min(frame_n, frame_count), frame_count)
+    proc.wait()
+    stderr_thread.join()
+    stderr_text = "".join(stderr_chunks)
+    if proc.returncode != 0:
+        logger.error("ffmpeg encode of %s failed (exit %d): %s", out_path.name, proc.returncode, stderr_text[-2000:])
+        raise subprocess.CalledProcessError(proc.returncode, cmd, output=None, stderr=stderr_text)
+    if on_progress and frame_count > 0:
+        on_progress(frame_count, frame_count)
     logger.info("Encoded %s (%.1f fps, %d bytes)", out_path.name, actual_fps, out_path.stat().st_size)
 
 
@@ -191,6 +243,10 @@ def record_clip(
     duration_s: float = 3.0,
     out_dir: Path = RECORDINGS_DIR,
     on_status=lambda message: None,
+    # (stage_label, fraction 0..1), called repeatedly during each of the
+    # long post-capture steps below (spec 090) - separate from on_status
+    # since those are one-off lines and this fires many times per stage.
+    on_progress: Callable[[str, float], None] = lambda stage, fraction: None,
 ) -> RecordingResult:
     logger.info("record_clip: starting, requested duration=%.1fs", duration_s)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -254,17 +310,29 @@ def record_clip(
         raw_out = out_dir / f"shot-improvement-{timestamp}.mp4"
         annotated_out = out_dir / f"shot-improvement-{timestamp}-annotated.mp4"
         on_status("Tunnistetaan käsien asentoja…")
-        annotate_frames_dir(raw_frames_dir, annotated_frames_dir, FRAME_FILE_EXTENSION, actual_fps)
+        annotate_frames_dir(
+            raw_frames_dir, annotated_frames_dir, FRAME_FILE_EXTENSION, actual_fps,
+            on_progress=lambda done, total: on_progress("Tunnistetaan käsien asentoja", done / total if total else 1.0),
+        )
         on_status("Lisätään spektrogrammi…")
         # Spec 085: only the annotated clip grows a spectrogram+playhead
         # panel underneath (640x480 -> 640x960) - the raw clip stays at
         # the camera's native resolution. Done here, after capture, since
         # the full audio buffer (needed for the whole-clip spectrogram)
         # only exists once sd.rec() has finished.
-        add_spectrograms_to_frames(annotated_frames_dir, audio_buffer, frame_count, FRAME_FILE_EXTENSION, width=FRAME_WIDTH)
+        add_spectrograms_to_frames(
+            annotated_frames_dir, audio_buffer, frame_count, FRAME_FILE_EXTENSION, width=FRAME_WIDTH,
+            on_progress=lambda done, total: on_progress("Lisätään spektrogrammi", done / total if total else 1.0),
+        )
         on_status("Yhdistetään ääni ja kuva…")
-        encode_frames_with_audio(raw_frames_dir, audio_tmp, raw_out, actual_fps)
-        encode_frames_with_audio(annotated_frames_dir, audio_tmp, annotated_out, actual_fps)
+        encode_frames_with_audio(
+            raw_frames_dir, audio_tmp, raw_out, actual_fps, frame_count,
+            on_progress=lambda done, total: on_progress("Tallennetaan levylle (raaka)", done / total if total else 1.0),
+        )
+        encode_frames_with_audio(
+            annotated_frames_dir, audio_tmp, annotated_out, actual_fps, frame_count,
+            on_progress=lambda done, total: on_progress("Tallennetaan levylle", done / total if total else 1.0),
+        )
 
     logger.info("record_clip: done -> %s / %s", raw_out.name, annotated_out.name)
     return RecordingResult(raw_out, annotated_out, video_name, audio_name, frame_count, actual_fps)

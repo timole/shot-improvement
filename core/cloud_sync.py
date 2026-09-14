@@ -38,6 +38,13 @@ logger = get_logger("cloud_sync")
 BUCKET = "wide-exchanger-463707-c6-shot-improvement"
 ANNOTATED_GLOB = "*-annotated.mp4"
 
+# GCS resumable-upload chunks must be a multiple of 256 KiB; this is
+# also the minimum, chosen deliberately so a typical clip (a few
+# hundred KB to a couple MB, per core.recorder) uploads in several
+# chunks rather than one - the point of chunking here is on_progress
+# granularity (spec 090), not upload efficiency for its own sake.
+UPLOAD_CHUNK_SIZE = 256 * 1024
+
 # Beside recordings/, not inside it - RECORDINGS_DIR is globbed for
 # annotated clips, and this is neither a clip nor a thing the gallery
 # should ever list.
@@ -85,8 +92,37 @@ def list_remote_names() -> set[str]:
     return {blob.name for blob in _get_client().bucket(BUCKET).list_blobs()}
 
 
-def upload(path: Path) -> None:
-    _get_client().bucket(BUCKET).blob(path.name).upload_from_filename(str(path), content_type="video/mp4")
+def upload(path: Path, on_progress: Optional[Callable[[int, int], None]] = None) -> None:
+    """on_progress(bytes_sent, total_bytes), if given, is called after
+    each uploaded chunk (spec 090). Without it, a plain single-call
+    upload is used (simpler, and exactly what every non-GUI caller
+    needs) - the chunked path below exists only to get progress
+    visibility during an upload slow enough to be worth watching."""
+    blob = _get_client().bucket(BUCKET).blob(path.name)
+    if on_progress is None:
+        blob.upload_from_filename(str(path), content_type="video/mp4")
+        logger.info("upload: %s", path.name)
+        return
+
+    total = path.stat().st_size
+    on_progress(0, total)
+    with open(path, "rb") as stream:
+        # Private API (no public equivalent exposes a resumable
+        # upload's own in-progress ResumableUpload/transport pair) -
+        # this is exactly what Blob.upload_from_filename does
+        # internally; reimplementing the loop ourselves is the only way
+        # to observe bytes_uploaded between chunks.
+        resumable_upload, transport = blob._initiate_resumable_upload(
+            client=_get_client(),
+            stream=stream,
+            content_type="video/mp4",
+            size=total,
+            num_retries=None,
+            chunk_size=UPLOAD_CHUNK_SIZE,
+        )
+        while not resumable_upload.finished:
+            resumable_upload.transmit_next_chunk(transport)
+            on_progress(resumable_upload.bytes_uploaded, total)
     logger.info("upload: %s", path.name)
 
 
@@ -110,15 +146,23 @@ class SyncWorker:
 
     def __init__(self, dispatch: Callable[[Callable[[], None]], None] = lambda fn: fn()) -> None:
         self._dispatch = dispatch
-        self._queue: "queue.Queue[tuple[str, object, Optional[Callable[[Optional[Exception]], None]]]]" = queue.Queue()
+        self._queue: "queue.Queue[tuple[str, object, Optional[Callable[[Optional[Exception]], None]], Optional[Callable[[int, int], None]]]]" = queue.Queue()
         self._tombstones = load_tombstones()
         threading.Thread(target=self._run, name="shot-improvement-sync", daemon=True).start()
 
     def start_reconcile(self, on_done: Optional[Callable[[Optional[Exception]], None]] = None) -> None:
-        self._queue.put(("reconcile", None, on_done))
+        self._queue.put(("reconcile", None, on_done, None))
 
-    def upload_recording(self, path: Path, on_done: Optional[Callable[[Optional[Exception]], None]] = None) -> None:
-        self._queue.put(("upload", path, on_done))
+    def upload_recording(
+        self,
+        path: Path,
+        on_done: Optional[Callable[[Optional[Exception]], None]] = None,
+        on_progress: Optional[Callable[[int, int], None]] = None,
+    ) -> None:
+        """on_progress(bytes_sent, total_bytes), if given, is dispatched
+        (spec 090) as core.cloud_sync.upload() reports it - see that
+        function's own docstring."""
+        self._queue.put(("upload", path, on_done, on_progress))
 
     def delete_recording(self, name: str, on_done: Optional[Callable[[Optional[Exception]], None]] = None) -> None:
         # Recorded before the action even reaches the queue - see the
@@ -126,17 +170,20 @@ class SyncWorker:
         # outlive a crash.
         self._tombstones.add(name)
         save_tombstones(self._tombstones)
-        self._queue.put(("delete", name, on_done))
+        self._queue.put(("delete", name, on_done, None))
 
     def _run(self) -> None:
         while True:
-            action, arg, on_done = self._queue.get()
+            action, arg, on_done, on_progress = self._queue.get()
             exc: Optional[Exception] = None
             try:
                 if action == "reconcile":
                     self._reconcile()
                 elif action == "upload":
-                    upload(arg)  # type: ignore[arg-type]
+                    if on_progress is None:
+                        upload(arg)  # type: ignore[arg-type]
+                    else:
+                        upload(arg, on_progress=lambda done, total: self._dispatch(lambda: on_progress(done, total)))  # type: ignore[arg-type,misc]
                 elif action == "delete":
                     delete(arg)  # type: ignore[arg-type]
                     self._tombstones.discard(arg)
