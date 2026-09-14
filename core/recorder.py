@@ -40,15 +40,28 @@ from .spectrogram import add_spectrograms_to_frames
 
 logger = get_logger("recorder")
 
-PREFERRED_VIDEO_LABEL = "logitech"
+PREFERRED_VIDEO_LABEL = "c922"
 PREFERRED_AUDIO_LABEL = "jabra"
 SAMPLE_RATE = 44100
-FRAME_WIDTH = 640
-FRAME_HEIGHT = 480
+FRAME_WIDTH = 1280
+FRAME_HEIGHT = 720
 # Requested as a ceiling when opening a camera - cv2/DirectShow negotiates
 # down to whatever the device actually supports; read back afterward
 # (cap.get(cv2.CAP_PROP_FPS)) for the real value, never assumed.
 REQUESTED_FPS_CEILING = 60.0
+# Spec 086 found real captured fps stuck around 8-9fps and blamed this
+# machine's CPU. That was wrong on two counts, both found and fixed in
+# spec 088: (1) PREFERRED_VIDEO_LABEL="logitech" never actually matched
+# this camera - Windows reports it as "c922 Pro Stream Webcam", with no
+# "logitech" substring - so every prior recording silently fell back to
+# a different, weaker "USB Camera" device, not the one OBS was tested
+# against; (2) even on the right device, cv2/DirectShow defaults to
+# uncompressed YUY2, which at 1280x720@60fps needs ~110MB/s - far past
+# USB2's real throughput - so the pixel format itself capped fps long
+# before the CPU was ever the bottleneck. Requesting MJPG (compressed,
+# same as OBS) fixes this, but only when set AFTER width/height/fps -
+# see open_camera().
+REQUESTED_FOURCC = "MJPG"
 # Intermediate per-frame files (deleted once ffmpeg encodes the real
 # output) are BMP, not PNG: measured on this hardware, PNG compression
 # cost ~26ms/frame (two files per captured frame = ~53ms/frame) versus
@@ -123,12 +136,23 @@ def open_camera(index: int) -> cv2.VideoCapture:
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, FRAME_WIDTH)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_HEIGHT)
     cap.set(cv2.CAP_PROP_FPS, REQUESTED_FPS_CEILING)
+    # Must be set AFTER width/height/fps, not before - measured directly
+    # on this hardware: setting FOURCC first has cap.set() report success
+    # but cap.get(CAP_PROP_FOURCC) silently stays YUY2 and real fps caps
+    # around 10; setting it last actually negotiates MJPG and gets ~58
+    # real fps at 1280x720.
+    cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*REQUESTED_FOURCC))
     if cap.isOpened():
         cap.read()
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         fps = cap.get(cv2.CAP_PROP_FPS)
-        logger.info("Opened camera %d: negotiated %dx%d @ %.1f fps (requested ceiling %.0f)", index, width, height, fps, REQUESTED_FPS_CEILING)
+        fourcc = int(cap.get(cv2.CAP_PROP_FOURCC))
+        fourcc_str = "".join(chr((fourcc >> (8 * i)) & 0xFF) for i in range(4))
+        logger.info(
+            "Opened camera %d: negotiated %dx%d @ %.1f fps, fourcc=%r (requested ceiling %.0f, fourcc %r)",
+            index, width, height, fps, fourcc_str, REQUESTED_FPS_CEILING, REQUESTED_FOURCC,
+        )
     else:
         logger.warning("Failed to open camera %d", index)
     return cap
@@ -232,7 +256,7 @@ def record_clip(
         # the camera's native resolution. Done here, after capture, since
         # the full audio buffer (needed for the whole-clip spectrogram)
         # only exists once sd.rec() has finished.
-        add_spectrograms_to_frames(annotated_frames_dir, audio_buffer, frame_count, FRAME_FILE_EXTENSION)
+        add_spectrograms_to_frames(annotated_frames_dir, audio_buffer, frame_count, FRAME_FILE_EXTENSION, width=FRAME_WIDTH)
         on_status("Yhdistetään ääni ja kuva…")
         encode_frames_with_audio(raw_frames_dir, audio_tmp, raw_out, actual_fps)
         encode_frames_with_audio(annotated_frames_dir, audio_tmp, annotated_out, actual_fps)

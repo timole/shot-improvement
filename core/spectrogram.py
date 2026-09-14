@@ -80,7 +80,7 @@ def with_playhead(spectrogram: np.ndarray, x_fraction: float) -> np.ndarray:
 
 
 def add_spectrograms_to_frames(
-    frames_dir: Path, audio: Optional[np.ndarray], frame_count: int, extension: str, width: int = 640
+    frames_dir: Path, audio: Optional[np.ndarray], frame_count: int, extension: str, width: int
 ) -> bool:
     """Rewrites each frame_%06d.<extension> in frames_dir in place,
     stacking [original frame; spectrogram-with-playhead] to double its

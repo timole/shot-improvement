@@ -30,6 +30,7 @@ from .log_setup import get_logger
 from .pose import PoseDetector, annotate_frames_dir, draw_palm_boxes
 from .recorder import (
     FRAME_FILE_EXTENSION,
+    FRAME_WIDTH,
     SAMPLE_RATE,
     encode_frames_with_audio,
     open_camera,
@@ -308,7 +309,7 @@ class LiveSession:
                     # composited in, since that permanently changes the
                     # annotated frame's size.
                     annotate_frames_dir(raw_dir, annotated_dir, FRAME_FILE_EXTENSION, actual_fps)
-                    add_spectrograms_to_frames(annotated_dir, audio_buffer, frame_count, FRAME_FILE_EXTENSION)
+                    add_spectrograms_to_frames(annotated_dir, audio_buffer, frame_count, FRAME_FILE_EXTENSION, width=FRAME_WIDTH)
                     encode_frames_with_audio(raw_dir, audio_tmp, raw_out, actual_fps)
                     encode_frames_with_audio(annotated_dir, audio_tmp, annotated_out, actual_fps)
                     result = RecordingResult(raw_out, annotated_out, frame_count, actual_fps)

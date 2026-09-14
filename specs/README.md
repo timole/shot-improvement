@@ -58,3 +58,4 @@ verified how, and any criterion that had to change and why.
 | [085](085-shot-improvement-spectrogram-and-background-removal.md) | Shot-improvement spectrogram panel and background removal | In progress |
 | [086](086-shot-improvement-performance.md) | Shot-improvement performance: GPU check, deferred pose inference | In progress |
 | [087](087-shot-improvement-web-gallery.md) | Shot-improvement web gallery (Google Sign-In gated web gallery, synced from the laptop) | In progress — see README.md's "Web gallery" section; the server side that served this was removed when this repo split out, so the gallery currently has no hosting |
+| [088](088-shot-improvement-60fps-720p.md) | Shot-improvement real 60fps capture at 1280x720 (fixed camera device match + MJPG negotiation) | Done |
