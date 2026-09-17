@@ -63,7 +63,12 @@ stick/blade detection entirely on further feedback - hand boxes are
 now yellow-only, and the per-shot snapshot JPEGs from spec 099 get
 those same hand-box annotations too, not just the speed label), and
 [103](specs/103-shot-improvement-hand-box-no-labels.md) (hand boxes
-are rectangle-only now - no "left hand"/"right hand" text).
+are rectangle-only now - no "left hand"/"right hand" text), and
+[104](specs/104-shot-improvement-vfr-and-shots-only.md) (fixed a
+frame-count desync on variable-frame-rate sources like phone screen
+recordings, and added a `--shots-only` mode to
+`tools/annotate_existing_video.py` for this laptop's ~4GB RAM, which
+the full per-frame pass can exceed on a real clip).
 
 (Two earlier browser-based versions, specs 078 and 079, were built
 first and then replaced entirely — the original laptop this was built
