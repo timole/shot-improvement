@@ -27,6 +27,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import cv2
 import numpy as np
 
+from core.compose import CLAPS_BAND_HEIGHT
 from core.log_setup import get_logger, setup_logging
 from core.profiling import Profiler
 from core.recorder import FRAME_HEIGHT, FRAME_WIDTH, record_clip
@@ -41,14 +42,16 @@ DISK_BENCH_FRAMES = 20
 def disk_microbenchmark() -> None:
     """Answers "is this pipeline disk-bound?" directly: writes/reads
     DISK_BENCH_FRAMES synthetic BMPs at this app's two real frame sizes
-    (raw 1280x720, annotated composite 1280x(720+SPECTROGRAM_HEIGHT))
-    into the real OS temp volume - same cv2.imwrite/imread calls the
-    pipeline itself uses, isolated from camera/pose/ffmpeg cost."""
+    (raw 1280x720, annotated composite 1280x(720+SPECTROGRAM_HEIGHT+
+    CLAPS_BAND_HEIGHT), spec 098) into the real OS temp volume - same
+    cv2.imwrite/imread calls the pipeline itself uses, isolated from
+    camera/pose/ffmpeg cost."""
     print(f"\n=== disk micro-benchmark ({DISK_BENCH_FRAMES} frames/size, real temp volume) ===")
     rng = np.random.default_rng(0)
+    annotated_height = FRAME_HEIGHT + SPECTROGRAM_HEIGHT + CLAPS_BAND_HEIGHT
     sizes = {
         "raw (1280x720 BMP)": (FRAME_HEIGHT, FRAME_WIDTH),
-        f"annotated composite (1280x{FRAME_HEIGHT + SPECTROGRAM_HEIGHT} BMP)": (FRAME_HEIGHT + SPECTROGRAM_HEIGHT, FRAME_WIDTH),
+        f"annotated composite (1280x{annotated_height} BMP)": (annotated_height, FRAME_WIDTH),
     }
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)

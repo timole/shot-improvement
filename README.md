@@ -38,7 +38,32 @@ anywhere in that service), and
 [097](specs/097-shot-improvement-av-sync-fix.md) (fixed an
 audio/video sync bug - video frames were timestamped assuming even
 capture spacing, which this hardware's camera doesn't actually
-provide).
+provide), and
+[098](specs/098-shot-improvement-clap-detection.md) (a first real
+version of the padel/hockey motion-tracking feature this app exists
+for: detects loud shot/hit sounds in the audio, pairs them
+chronologically, and annotates each pair's puck speed - a third band
+under the video/spectrogram, computed from a rink's real 61m length),
+and
+[099](specs/099-shot-improvement-shot-images.md) (a plain snapshot
+JPEG per detected shot - the exact frame the stick hits the puck,
+native 1280x720, with the computed speed burned in), and
+[100](specs/100-shot-improvement-puck-and-stick-detection.md) (puck
+and hockey-stick detection - tested via `tools/annotate_image.py`
+against a real still photo; hand boxes are now half-size and labeled
+in English), and
+[101](specs/101-shot-improvement-stick-between-hands.md) (redesigned
+on feedback: puck annotation removed; the stick's yellow shaft is
+anchored between the player's two hands - using MediaPipe's own
+position estimate even for a hand too occluded to draw its own box -
+and its red blade is a traced extension past the lower hand, not a
+puck-anchored box), and
+[102](specs/102-shot-improvement-shot-image-hand-boxes.md) (dropped
+stick/blade detection entirely on further feedback - hand boxes are
+now yellow-only, and the per-shot snapshot JPEGs from spec 099 get
+those same hand-box annotations too, not just the speed label), and
+[103](specs/103-shot-improvement-hand-box-no-labels.md) (hand boxes
+are rectangle-only now - no "left hand"/"right hand" text).
 
 (Two earlier browser-based versions, specs 078 and 079, were built
 first and then replaced entirely — the original laptop this was built

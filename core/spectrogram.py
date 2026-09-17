@@ -31,10 +31,13 @@ from .profiling import NULL_PROFILER, Profiler
 
 logger = get_logger("spectrogram")
 
-# The composited annotated frame is exactly 2x as tall as the video
-# alone (video on top, spectrogram+playhead on the bottom), matching
-# this app's fixed FRAME_HEIGHT (core.recorder) so 640x480 -> 640x960.
-SPECTROGRAM_HEIGHT = 480
+# The composited annotated frame stacks three bands - video, this
+# spectrogram+playhead panel, and (spec 098) a claps/puck-speed
+# annotation band below it. core.compose owns the actual 3-band layout
+# (CLAPS_BAND_HEIGHT lives there, not here) - this is just this panel's
+# own height, shrunk from 480 in spec 098 to make room for the new band
+# beneath it, same 1280x1200 total either way.
+SPECTROGRAM_HEIGHT = 280
 FFT_WINDOW = 512
 FFT_HOP = 128
 DYNAMIC_RANGE_DB = 80.0

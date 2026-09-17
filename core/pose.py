@@ -32,13 +32,13 @@ MODEL_URL = (
 MODEL_PATH = Path(__file__).resolve().parent.parent / "models" / "pose_landmarker_lite.task"
 
 VISIBILITY_THRESHOLD = 0.5
-BOX_SIZE = 80
-BOX_COLOR_BGR = (0, 200, 83)  # OpenCV drawing is BGR, not RGB
+BOX_SIZE = 40  # spec 100: halved from 80
+BOX_COLOR_BGR = (0, 255, 255)  # yellow (spec 102) - OpenCV drawing is BGR, not RGB
 
 # (wrist, pinky-knuckle, index-knuckle, label) - BlazePose indices.
 PALM_LANDMARKS = [
-    (15, 17, 19, "vasen kasi"),
-    (16, 18, 20, "oikea kasi"),
+    (15, 17, 19, "left hand"),
+    (16, 18, 20, "right hand"),
 ]
 
 
@@ -82,14 +82,13 @@ def palm_boxes_from_landmarks(
 
 
 def draw_palm_boxes(frame_bgr: np.ndarray, boxes: Sequence[PalmBox]) -> None:
+    """Spec 103: the rectangle only, no "left hand"/"right hand" label
+    text - box.label still carries which hand it is (used elsewhere,
+    e.g. log lines), just not drawn onto the frame any more."""
     half = BOX_SIZE // 2
     for box in boxes:
         x, y = int(box.cx), int(box.cy)
         cv2.rectangle(frame_bgr, (x - half, y - half), (x + half, y + half), BOX_COLOR_BGR, 4)
-        cv2.putText(
-            frame_bgr, box.label, (x - half, max(y - half - 8, 12)),
-            cv2.FONT_HERSHEY_SIMPLEX, 0.6, BOX_COLOR_BGR, 2, cv2.LINE_AA,
-        )
 
 
 class PoseDetector:

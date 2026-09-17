@@ -172,11 +172,12 @@ def process_pending_recording(
     091's pattern, reused here) - a new recording must never be slowed
     down by this, which is the entire point of deferring processing in
     the first place."""
-    from .compose import compose_annotated_frames
+    from .compose import compose_annotated_frames, save_shot_images
     from .recorder import (
         FRAME_FILE_EXTENSION,
         FRAME_HEIGHT,
         FRAME_WIDTH,
+        SAMPLE_RATE,
         encode_frames_with_audio,
         lower_current_thread_priority,
     )
@@ -213,6 +214,13 @@ def process_pending_recording(
                     on_progress=report("Tunnistetaan käsien asentoja ja spektrogrammi"),
                     profiler=profiler,
                 )
+                # Spec 099: a plain snapshot + speed label per detected
+                # shot, alongside the raw/annotated mp4s.
+                with profiler.accum("shot_images"):
+                    save_shot_images(
+                        item.raw_dir, FRAME_FILE_EXTENSION, item.frame_times, audio_buffer, SAMPLE_RATE,
+                        out_dir, f"shot-improvement-{item.timestamp}",
+                    )
                 encode_frames_with_audio(
                     annotated_dir, item.audio_path, annotated_out, item.actual_fps, item.frame_count,
                     frame_times=item.frame_times,

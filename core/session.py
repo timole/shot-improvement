@@ -26,7 +26,7 @@ import numpy as np
 import sounddevice as sd
 import soundfile as sf
 
-from .compose import compose_annotated_frames
+from .compose import compose_annotated_frames, save_shot_images
 from .log_setup import get_logger
 from .pending import PENDING_DIR, delete_pending, write_meta
 from .pose import PoseDetector, draw_palm_boxes
@@ -497,6 +497,13 @@ class LiveSession:
                         on_progress=report("Tunnistetaan käsien asentoja ja spektrogrammi"),
                         profiler=profiler,
                     )
+                    # Spec 099: a plain snapshot + speed label per
+                    # detected shot, alongside the raw/annotated mp4s.
+                    with profiler.accum("shot_images"):
+                        save_shot_images(
+                            raw_dir, FRAME_FILE_EXTENSION, frame_times, audio_buffer, SAMPLE_RATE,
+                            out_dir, f"shot-improvement-{timestamp}",
+                        )
                     encode_frames_with_audio(
                         annotated_dir, audio_tmp, annotated_out, actual_fps, frame_count,
                         frame_times=frame_times,

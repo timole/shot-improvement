@@ -61,7 +61,7 @@ import sounddevice as sd
 import soundfile as sf
 
 from . import devices
-from .compose import compose_annotated_frames
+from .compose import compose_annotated_frames, save_shot_images
 from .log_setup import get_logger
 from .profiling import NULL_PROFILER, Profiler, dir_size
 
@@ -459,6 +459,15 @@ def record_clip(
             on_progress=lambda done, total: on_progress("Tunnistetaan käsien asentoja ja spektrogrammi", done / total if total else 1.0),
             profiler=profiler,
         )
+        # Spec 099: a plain snapshot + speed label per detected shot,
+        # alongside the raw/annotated mp4s - reuses the same raw frames
+        # (still on disk, not yet cleaned up) and re-runs clap detection
+        # on the same audio (cheap, ~12ms - see spec 098's profiling).
+        with profiler.accum("shot_images"):
+            save_shot_images(
+                raw_frames_dir, FRAME_FILE_EXTENSION, frame_times, audio_buffer, SAMPLE_RATE,
+                out_dir, f"shot-improvement-{timestamp}",
+            )
         on_status("Yhdistetään ääni ja kuva…")
         encode_frames_with_audio(
             raw_frames_dir, audio_tmp, raw_out, actual_fps, frame_count,

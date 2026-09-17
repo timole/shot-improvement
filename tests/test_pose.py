@@ -29,7 +29,7 @@ def test_palm_box_is_the_average_of_wrist_pinky_and_index_knuckle() -> None:
 
     assert len(boxes) == 1
     box = boxes[0]
-    assert box.label == "vasen kasi"
+    assert box.label == "left hand"
     assert box.cx == (0.3 + 0.36 + 0.33) / 3 * 100
     assert box.cy == (0.6 + 0.54 + 0.51) / 3 * 200
 
@@ -56,7 +56,7 @@ def test_both_hands_produce_two_boxes() -> None:
     boxes = palm_boxes_from_landmarks([landmarks], frame_width=100, frame_height=100)
 
     labels = {box.label for box in boxes}
-    assert labels == {"vasen kasi", "oikea kasi"}
+    assert labels == {"left hand", "right hand"}
 
 
 def test_draw_palm_boxes_does_not_crash_and_modifies_the_frame() -> None:
