@@ -18,22 +18,34 @@ import winsound
 from datetime import datetime
 from pathlib import Path
 from tkinter import messagebox, ttk
-from typing import Optional
+from typing import Callable, Optional
 
 import cv2
 from PIL import Image, ImageTk
 
-from core import cloud_sync, devices
+from core import azure_sync, cloud_sync, devices, pending
 from core.log_setup import get_logger, setup_logging
 from core.playback import SKIP_SECONDS, SPEED_OPTIONS, ClipPlayer, format_time
-from core.recorder import RECORDINGS_DIR
+from core.recorder import FRAME_HEIGHT, FRAME_WIDTH, RECORDINGS_DIR
 from core.segmentation import BackgroundRemover
 from core.session import LiveSession, RecordingResult
 
 setup_logging()
 logger = get_logger("gui")
 
-PREVIEW_WIDTH = 480
+# Frames are always shown resized to this fixed on-screen size, NOT
+# the camera's native capture size (1280x720, FRAME_WIDTH/FRAME_HEIGHT
+# - unaffected by this, still what's actually recorded/encoded) - a
+# smaller preview window is easier to fit alongside the recordings
+# list on a small laptop screen. 640x360 keeps the same 16:9 aspect
+# ratio as the native 1280x720 capture (exactly half each dimension).
+# When the source frame already matches this size, _show_frame skips
+# resizing entirely; a mismatched source (any size, including an
+# annotated frame's taller spectrogram-panel composite) gets a plain
+# cv2.resize rather than the arbitrary-ratio PIL resize this used to
+# do on every single displayed frame (live preview, played frame, or a
+# single stepped frame alike).
+DISPLAY_SIZE = (640, 360)
 DEFAULT_DURATION_S = 10
 PREVIEW_POLL_MS = 10  # self-paced anyway - actual cadence follows the work each tick does
 # Spec 091: a 3-2-1 countdown before capture actually starts, one
@@ -48,14 +60,6 @@ COUNTDOWN_BEEP_MS = 150
 # own, tighter, SLOW_FRAME_WARN_THRESHOLD_S for the read_frame()-level
 # version of this same idea).
 SLOW_TICK_WARN_THRESHOLD_S = 1.0
-# Spec 091: when maximized ("zoomed" is Tk's name for it on Windows -
-# there's no separate true-fullscreen mode in use here), the recordings
-# list moves to a tall column on the right instead of a short list
-# below everything else, using the extra width a maximized window has
-# to spare. RIGHT_COLUMN_WIDTH is fixed (not just a minimum) via
-# pack_propagate(False) below - a Treeview's own requested width would
-# otherwise vary with its content/columns.
-RIGHT_COLUMN_WIDTH = 340
 
 _FILENAME_TIMESTAMP_RE = re.compile(r"shot-improvement-(\d{14})(?:-annotated)?\.mp4$")
 
@@ -104,45 +108,62 @@ class App:
         self._segmenting = False  # a background-removal worker thread is currently running
         self._photo_image = None  # keep a reference alive - Tkinter/PhotoImage gotcha
         self._counting_down = False  # the 3-2-1 countdown is running, before actual capture starts
-        self._window_state = root.state()
+        self._display_size = DISPLAY_SIZE
+        # Spec 093: "Vain nauhoitus" (recording only) mode - see
+        # _build_record_row for the checkbox and on_process_pending_click
+        # for the queue this list feeds.
+        self._pending_items: list[pending.PendingRecording] = []
+        self._processing_pending = False
 
-        # Spec 091: left_frame holds everything except the recordings
-        # list (camera/device controls, preview, record button,
-        # playback controls, status) - right_frame holds only the
-        # recordings list. Built as two separate containers (rather
-        # than everything packed straight into root) specifically so
-        # _apply_layout() can rearrange them - stacked vertically
-        # normally, side by side with a tall list on the right once the
-        # window is maximized.
+        # Two columns: left_frame holds every control (camera/device
+        # pickers, record row, transport buttons, speed/volume/
+        # loop/background-removal tools, status) except the timeline,
+        # and - below all of that - the recordings list; center_frame
+        # holds only the video (shown at DISPLAY_SIZE, 640x360 - see
+        # that constant's docstring) and, right under it, the timeline
+        # scrubber. Kept as separate containers so each can be built/
+        # packed independently in _apply_layout().
         main = ttk.Frame(root)
         main.pack(fill="both", expand=True)
         self.left_frame = ttk.Frame(main)
-        self.right_frame = ttk.Frame(main)
+        self.center_frame = ttk.Frame(main)
 
         self._build_device_row(self.left_frame)
 
-        self.preview_label = tk.Label(self.left_frame, background="#000")
+        self.preview_label = tk.Label(self.center_frame, background="#000")
         self.preview_label.pack(padx=8, pady=8)
 
         self._build_record_row(self.left_frame)
-        self._build_playback_controls(self.left_frame)
+        self._build_playback_controls(self.left_frame, self.center_frame)
 
         self.status_var = tk.StringVar(value="Käynnistetään kameraa…")
         self.status_label = ttk.Label(self.left_frame, textvariable=self.status_var)
         self.status_label.pack(pady=(0, 8))
 
-        self._build_list(self.right_frame)
+        self._build_list(self.left_frame)
         self._apply_layout()
-        root.bind("<Configure>", self._on_root_configure)
 
         self._video_paths: list[Path] = []
         self.refresh_recordings()
+        # Independent of the camera/session (spec 093: processing a
+        # pending queue never touches the camera) - shown immediately,
+        # even before _init_session runs, so a backlog from a previous
+        # session is visible and processable even if the camera fails
+        # to open this time.
+        self.refresh_pending()
 
-        # Spec 087: uploads new annotated clips to the web gallery and
-        # deletes ones removed locally. Runs on its own background
-        # thread (see cloud_sync.SyncWorker) - starting it never blocks
-        # camera startup below.
-        self._sync_worker = cloud_sync.SyncWorker(dispatch=lambda fn: self.root.after(0, fn))
+        # Spec 087/094/095: uploads new clips (raw+annotated+preview) to
+        # every configured cloud backend and deletes ones removed
+        # locally. Runs on its own background thread (see
+        # cloud_sync.SyncWorker) - starting it never blocks camera
+        # startup below. Dual-write during the ai.timolehtonen.tech ->
+        # shot.timolehtonen.tech transition (spec 095) - GCS backs the
+        # existing gallery, Azure Blob backs the new one; both stay in
+        # sync from one SyncWorker until GCS is retired later.
+        self._sync_worker = cloud_sync.SyncWorker(
+            backends=[cloud_sync.GcsBackend(), azure_sync.AzureBlobBackend()],
+            dispatch=lambda fn: self.root.after(0, fn),
+        )
         self._sync_worker.start_reconcile(on_done=self._on_sync_reconciled)
 
         self.root.after(0, self._init_session)
@@ -188,14 +209,41 @@ class App:
         self.record_button = ttk.Button(frame, text="Tallenna", command=self.on_record_click, state="disabled")
         self.record_button.pack(side="left", padx=(8, 0))
 
-    def _build_playback_controls(self, root: tk.Tk) -> None:
-        # Hidden (not packed) while mode == "live"; shown for as long as
-        # a clip is loaded, whether it's actually playing or paused -
-        # see spec 084. Built once, up front, so on_play_selected() etc.
-        # only ever need to pack/unpack this one frame.
-        self.playback_frame = ttk.Frame(root)
+        # Spec 093: post-capture processing (pose annotation,
+        # spectrogram, ffmpeg encoding) is CPU-heavy enough on modest
+        # hardware to noticeably slow down a NEW recording started while
+        # it runs, even with spec 091's own priority handling - this
+        # checkbox lets the user skip that contention entirely: capture
+        # only, nothing else, until "Käsittele odottavat" is clicked.
+        defer_row = ttk.Frame(root)
+        defer_row.pack(pady=(0, 4))
+        self.defer_processing_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            defer_row, text="Vain nauhoitus (käsittele myöhemmin)", variable=self.defer_processing_var,
+        ).pack(side="left")
 
-        transport = ttk.Frame(self.playback_frame)
+        pending_row = ttk.Frame(root)
+        pending_row.pack(pady=(0, 4))
+        self.pending_var = tk.StringVar(value="")
+        ttk.Label(pending_row, textvariable=self.pending_var, foreground="#555").pack(side="left")
+        self.process_pending_button = ttk.Button(
+            pending_row, text="Käsittele odottavat", command=self.on_process_pending_click, state="disabled",
+        )
+        self.process_pending_button.pack(side="left", padx=(8, 0))
+
+    def _build_playback_controls(self, controls_root: tk.Tk, timeline_root: tk.Tk) -> None:
+        # Both hidden (not packed) while mode == "live"; shown together
+        # for as long as a clip is loaded, whether it's actually
+        # playing or paused - see spec 084. Built once, up front, so
+        # on_play_selected() etc. only ever need to pack/unpack these
+        # two frames. playback_controls_frame holds everything except
+        # the timeline (lives in the left column); timeline_frame holds
+        # just the scrubber + time label (lives under the video, in the
+        # center column).
+        self.playback_controls_frame = ttk.Frame(controls_root)
+        self.timeline_frame = ttk.Frame(timeline_root)
+
+        transport = ttk.Frame(self.playback_controls_frame)
         transport.pack(pady=(4, 0))
         # -1/+1 ruutu are plain text, not icons: unlike play/pause/stop,
         # there's no universal single-glyph symbol for "step one frame"
@@ -213,17 +261,17 @@ class App:
             side="left", padx=(12, 0)
         )
 
-        scrub_row = ttk.Frame(self.playback_frame)
-        scrub_row.pack(fill="x", padx=8, pady=(4, 0))
         self.scrub_var = tk.DoubleVar(value=0.0)
-        self.scrub_scale = ttk.Scale(scrub_row, from_=0.0, to=1.0, variable=self.scrub_var, orient="horizontal")
+        self.scrub_scale = ttk.Scale(
+            self.timeline_frame, from_=0.0, to=1.0, variable=self.scrub_var, orient="horizontal"
+        )
         self.scrub_scale.pack(side="left", fill="x", expand=True)
         self.scrub_scale.bind("<ButtonPress-1>", self.on_scrubber_press)
         self.scrub_scale.bind("<ButtonRelease-1>", self.on_scrubber_release)
         self.time_var = tk.StringVar(value="0:00.0 / 0:00.0")
-        ttk.Label(scrub_row, textvariable=self.time_var, width=14).pack(side="left", padx=(8, 0))
+        ttk.Label(self.timeline_frame, textvariable=self.time_var, width=14).pack(side="left", padx=(8, 0))
 
-        options_row = ttk.Frame(self.playback_frame)
+        options_row = ttk.Frame(self.playback_controls_frame)
         options_row.pack(pady=(4, 4))
         ttk.Label(options_row, text="Nopeus:").pack(side="left")
         self.speed_var = tk.StringVar(value=_speed_label(1.0))
@@ -251,7 +299,7 @@ class App:
             side="left"
         )
 
-        frame_tools_row = ttk.Frame(self.playback_frame)
+        frame_tools_row = ttk.Frame(self.playback_controls_frame)
         frame_tools_row.pack(pady=(0, 4))
         ttk.Button(frame_tools_row, text="Häivytä tausta", command=self.on_remove_background_click).pack(side="left")
         ttk.Label(
@@ -283,30 +331,12 @@ class App:
         ttk.Button(button_row, text="Poista", command=self.on_delete_selected).pack(side="left", padx=4)
 
     def _apply_layout(self) -> None:
-        """Stacked (left_frame above right_frame, both full width) when
-        the window is a normal size; side by side, right_frame a fixed
-        tall column, once maximized. Only called when self._window_state
-        actually changes (see _on_root_configure) - repacking on every
-        resize event would be wasteful and isn't needed."""
-        self.left_frame.pack_forget()
-        self.right_frame.pack_forget()
-        self.right_frame.pack_propagate(False)
-        if self._window_state == "zoomed":
-            self.right_frame.configure(width=RIGHT_COLUMN_WIDTH)
-            self.left_frame.pack(side="left", fill="both", expand=True)
-            self.right_frame.pack(side="right", fill="y")
-        else:
-            self.left_frame.pack(fill="both", expand=True)
-            self.right_frame.pack(fill="both", expand=True)
-
-    def _on_root_configure(self, event: tk.Event) -> None:
-        if event.widget is not self.root:
-            return
-        state = self.root.state()
-        if state != self._window_state:
-            logger.info("Window state changed: %r -> %r", self._window_state, state)
-            self._window_state = state
-            self._apply_layout()
+        """Two columns side by side: controls, then the recordings
+        list below them, on the left; the video (shown at
+        DISPLAY_SIZE) with its timeline right under it, on the
+        right/center."""
+        self.left_frame.pack(side="left", fill="y")
+        self.center_frame.pack(side="left", fill="both", expand=True)
 
     # --- session / device setup ---------------------------------------
 
@@ -460,10 +490,11 @@ class App:
             self.status_var.set("Käsitellään tallennetta…")
 
     def _show_frame(self, frame) -> None:
+        target_w, target_h = self._display_size
+        if frame.shape[1] != target_w or frame.shape[0] != target_h:
+            frame = cv2.resize(frame, (target_w, target_h), interpolation=cv2.INTER_AREA)
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         image = Image.fromarray(rgb)
-        scale = PREVIEW_WIDTH / image.width
-        image = image.resize((PREVIEW_WIDTH, int(image.height * scale)))
         self._photo_image = ImageTk.PhotoImage(image)
         self.preview_label.configure(image=self._photo_image)
 
@@ -507,6 +538,8 @@ class App:
             dispatch=lambda fn: self.root.after(0, fn),
             on_progress=self._on_recording_progress,
             on_raw_ready=self._on_raw_ready,
+            defer_processing=self.defer_processing_var.get(),
+            on_deferred_saved=self._on_deferred_saved,
         )
 
     @staticmethod
@@ -555,26 +588,124 @@ class App:
             self.status_var.set("Nauhoitus epäonnistui (ei kuvia kamerasta).")
             return
         logger.info("_on_recording_done: %s (%d frames, %.1f fps)", result.raw_path.name, result.frame_count, result.actual_fps)
+        self._handle_processed_result(result)
+
+    def _handle_processed_result(self, result: RecordingResult) -> None:
+        # Shared by a normal recording's on_done (above) AND a processed
+        # pending item's on_done (spec 093, _process_next_pending) -
+        # refreshes the recordings list, uploads BOTH clips (spec 094:
+        # the raw, native-resolution capture now syncs too, not just
+        # the annotated pair), and reports status. Deliberately does
+        # NOT touch the record button: a normal recording already
+        # re-enabled it via _on_raw_ready well before this runs, and
+        # pending-queue processing never disabled it in the first place
+        # (it doesn't touch the camera).
         saved_msg = f"Tallennettu ({result.frame_count} kuvaa, {result.actual_fps:.1f} fps)."
         self._set_status_if_idle(f"{saved_msg} Synkronoidaan verkkoon…")
         self.refresh_recordings()
 
-        def on_sync_done(exc: Optional[Exception]) -> None:
-            if exc is not None:
-                logger.warning("Cloud upload failed for %s: %s", result.annotated_path.name, exc)
-                self._set_status_if_idle(f"{saved_msg} Synkronointi epäonnistui: {exc}")
-            else:
-                self._set_status_if_idle(f"{saved_msg} Synkronoitu verkkoon.")
+        def make_on_progress(label: str) -> Callable[[int, int], None]:
+            def on_progress(bytes_sent: int, total_bytes: int) -> None:
+                percent = (bytes_sent / total_bytes * 100) if total_bytes else 100.0
+                self._set_status_if_idle(f"{saved_msg} Synkronoidaan verkkoon ({label}): {percent:.0f} %")
+            return on_progress
 
-        def on_sync_progress(bytes_sent: int, total_bytes: int) -> None:
-            percent = (bytes_sent / total_bytes * 100) if total_bytes else 100.0
-            self._set_status_if_idle(f"{saved_msg} Synkronoidaan verkkoon: {percent:.0f} %")
+        def make_on_done(label: str, path: Path) -> Callable[[Optional[Exception]], None]:
+            def on_done(exc: Optional[Exception]) -> None:
+                if exc is not None:
+                    logger.warning("Cloud upload failed for %s: %s", path.name, exc)
+                    self._set_status_if_idle(f"{saved_msg} Synkronointi epäonnistui ({label}): {exc}")
+                else:
+                    self._set_status_if_idle(f"{saved_msg} Synkronoitu verkkoon ({label}).")
+            return on_done
 
-        self._sync_worker.upload_recording(result.annotated_path, on_done=on_sync_done, on_progress=on_sync_progress)
+        # SyncWorker's queue is a single, strictly-ordered FIFO (one
+        # background thread - see its own docstring), so queuing both
+        # here always uploads raw first, then annotated, with each
+        # one's progress/done messages fully finishing before the
+        # next's begin - no need to chain these through each other's
+        # on_done to get that ordering.
+        self._sync_worker.upload_recording(
+            result.raw_path, on_done=make_on_done("raaka", result.raw_path), on_progress=make_on_progress("raaka"),
+        )
+        self._sync_worker.upload_recording(
+            result.annotated_path, on_done=make_on_done("merkitty", result.annotated_path), on_progress=make_on_progress("merkitty"),
+        )
 
     def _on_sync_reconciled(self, exc: Optional[Exception]) -> None:
         if exc is not None:
             logger.warning("Cloud sync reconcile failed: %s", exc)
+
+    # --- deferred processing ("Vain nauhoitus") -------------------------
+    #
+    # spec 093: when defer_processing was on for the recording that just
+    # finished, this fires instead of _on_raw_ready/_on_recording_done -
+    # no mp4 exists yet, just raw frames + audio saved to core.pending.
+    # PENDING_DIR. Processing them into mp4s happens later, on request,
+    # via on_process_pending_click below.
+
+    def _on_deferred_saved(self, ok: bool) -> None:
+        self.record_button.config(state="normal")
+        self.refresh_pending()
+        if ok:
+            self._set_status_if_idle(f"Tallennettu käsittelyä varten ({len(self._pending_items)} odottaa).")
+        else:
+            self._set_status_if_idle("Nauhoitus epäonnistui (ei kuvia kamerasta).")
+
+    def refresh_pending(self) -> None:
+        self._pending_items = pending.list_pending()
+        n = len(self._pending_items)
+        self.pending_var.set(f"Odottaa käsittelyä: {n}" if n else "Ei odottavia tallenteita.")
+        # Left alone while a batch is already running - on_process_
+        # pending_click/​_process_next_pending own the button's state
+        # for that whole stretch, re-enabling it only once the queue
+        # they started is fully drained (not just whenever the count
+        # happens to reach zero mid-batch, which it never does anyway
+        # since finished items are removed from the list, not this one).
+        if not self._processing_pending:
+            self.process_pending_button.config(state="normal" if n else "disabled")
+
+    def on_process_pending_click(self) -> None:
+        if self._processing_pending or not self._pending_items:
+            return
+        logger.info("User clicked Käsittele odottavat (%d pending)", len(self._pending_items))
+        self._processing_pending = True
+        self.process_pending_button.config(state="disabled")
+        self._process_next_pending(list(self._pending_items), 0)
+
+    def _process_next_pending(self, queue: list[pending.PendingRecording], index: int) -> None:
+        if index >= len(queue):
+            self._processing_pending = False
+            self.refresh_pending()
+            self._set_status_if_idle("Käsittely valmis.")
+            return
+        item = queue[index]
+        total = len(queue)
+        self._set_status_if_idle(f"Käsitellään ({index + 1}/{total})…")
+
+        def on_progress(stage: str, fraction: float) -> None:
+            self._set_status_if_idle(f"Käsitellään ({index + 1}/{total}): {stage}: {fraction * 100:.0f} %")
+
+        def on_done(result: Optional[RecordingResult]) -> None:
+            if result is not None:
+                logger.info("process_pending: done -> %s", result.raw_path.name)
+                self._handle_processed_result(result)
+            else:
+                logger.warning("process_pending: failed for %s", item.dir_path)
+                self._set_status_if_idle(f"Käsittely epäonnistui ({index + 1}/{total}) - tallenne säilyy odottavana.")
+            # Refreshed after every item, not just once at the end of the
+            # whole batch - the count should visibly drop as the queue
+            # drains. Safe to call mid-batch: refresh_pending() leaves
+            # the button alone while self._processing_pending is True.
+            self.refresh_pending()
+            self._process_next_pending(queue, index + 1)
+
+        pending.process_pending_recording(
+            item, RECORDINGS_DIR, on_done,
+            dispatch=lambda fn: self.root.after(0, fn),
+            on_progress=on_progress,
+            on_raw_ready=self._on_raw_ready,
+        )
 
     # --- recordings list -------------------------------------------------
 
@@ -601,17 +732,18 @@ class App:
         path.unlink(missing_ok=True)
         self.refresh_recordings()
 
-        if path.name.endswith("-annotated.mp4"):
-            # The raw member of a pair has no cloud counterpart (only
-            # annotated clips ever sync), so deleting it is local-only.
-            def on_sync_done(exc: Optional[Exception]) -> None:
-                if exc is not None:
-                    logger.warning("Cloud delete failed for %s: %s", path.name, exc)
-                    self.status_var.set(f"Poisto verkosta epäonnistui: {exc}")
-                else:
-                    self.status_var.set("Poistettu myös verkosta.")
+        # Spec 094: both the raw and annotated clip sync to the cloud
+        # now (previously only the annotated one did, so only that one
+        # got a matching cloud delete) - whichever member of the pair
+        # was just deleted locally gets tombstoned the same way.
+        def on_sync_done(exc: Optional[Exception]) -> None:
+            if exc is not None:
+                logger.warning("Cloud delete failed for %s: %s", path.name, exc)
+                self.status_var.set(f"Poisto verkosta epäonnistui: {exc}")
+            else:
+                self.status_var.set("Poistettu myös verkosta.")
 
-            self._sync_worker.delete_recording(path.name, on_done=on_sync_done)
+        self._sync_worker.delete_recording(path.name, on_done=on_sync_done)
 
     # --- native playback (same preview area, no external player) -------
     #
@@ -655,12 +787,15 @@ class App:
         self.scrub_scale.config(to=max(self._player.duration_s, 0.01))
         self._mode = "playback"
         # pack()'s default placement follows call order, not creation
-        # order - since this is packed late (long after the status
-        # label/recordings list below it were already packed in
+        # order - since playback_controls_frame is packed late (long
+        # after the status label below it was already packed in
         # __init__), it would otherwise land at the very end of the
-        # window instead of where it visually belongs, right after the
-        # record row. before= pins it there regardless of call timing.
-        self.playback_frame.pack(pady=(0, 4), before=self.status_label)
+        # left column instead of where it visually belongs, right after
+        # the record row. before= pins it there regardless of call
+        # timing. timeline_frame has nothing packed after it in the
+        # center column, so it needs no such pin.
+        self.playback_controls_frame.pack(pady=(0, 4), before=self.status_label)
+        self.timeline_frame.pack(fill="x", padx=8, pady=(0, 8))
         self.record_button.config(state="disabled")
         self._player.play()
         self._next_frame_due = time.monotonic()
@@ -766,7 +901,8 @@ class App:
     def on_back_to_live_click(self) -> None:
         self._close_player()
         self._mode = "live"
-        self.playback_frame.pack_forget()
+        self.playback_controls_frame.pack_forget()
+        self.timeline_frame.pack_forget()
         if self.session is not None:
             self.record_button.config(state="normal")
         self.status_var.set("Valmis.")

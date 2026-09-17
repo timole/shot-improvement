@@ -1,0 +1,26 @@
+# spec 095: az acr build has no .gitignore fallback (unlike gcloud's
+# .gcloudignore) - without this, every build uploads the full working
+# tree (venv/ alone is ~500MB) as build context. server/Dockerfile only
+# needs server/ and web/; everything else here is the laptop app.
+
+venv/
+server/.venv/
+server/tests/
+recordings/
+pending/
+models/
+logs/
+__pycache__/
+*.pyc
+.pytest_cache/
+.git/
+.gitignore
+specs/
+tests/
+tools/
+core/
+gui.py
+record.py
+requirements.txt
+README.md
+cloud_sync_tombstones.json

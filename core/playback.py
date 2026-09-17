@@ -91,6 +91,15 @@ class ClipPlayer:
         self.audio_data, self.audio_samplerate = extract_audio(path)
 
         self.frame_idx = 0
+        # The frame index a plain cap.read() (no cap.set() first) will
+        # actually return next. Tracked separately from frame_idx so
+        # read_current_frame() can skip cap.set(CAP_PROP_POS_FRAMES) -
+        # which forces a seek to the nearest preceding keyframe and a
+        # decode-forward from there, expensive on this app's own
+        # clips (libx264 default ~250-frame keyframe interval) - for
+        # the common case of stepping one frame forward, where a cheap
+        # sequential read already lands exactly there.
+        self._decode_pos = 0
         self.playing = False
         self.speed = 1.0
         self.loop = False
@@ -116,9 +125,16 @@ class ClipPlayer:
     def read_current_frame(self):
         """Reads and returns the frame at frame_idx without changing it -
         used by seek/step. Leaves the capture positioned so a
-        subsequent advance() naturally continues from frame_idx + 1."""
-        self.cap.set(cv2.CAP_PROP_POS_FRAMES, self.frame_idx)
+        subsequent advance() naturally continues from frame_idx + 1.
+
+        Skips cap.set() - a real seek, see _decode_pos's docstring -
+        whenever frame_idx is exactly where the decoder already sits,
+        which is the common case for "+1 ruutu" stepping forward
+        through a clip one frame at a time."""
+        if self.frame_idx != self._decode_pos:
+            self.cap.set(cv2.CAP_PROP_POS_FRAMES, self.frame_idx)
         ok, frame = self.cap.read()
+        self._decode_pos = self.frame_idx + 1 if ok else self.frame_idx
         return frame if ok else None
 
     def step(self, delta_frames: int):
@@ -137,6 +153,7 @@ class ClipPlayer:
         if not ok:
             return None
         self.frame_idx += 1
+        self._decode_pos = self.frame_idx
         return frame
 
     def play(self) -> None:

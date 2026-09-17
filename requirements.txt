@@ -6,4 +6,6 @@ imageio-ffmpeg==0.6.0
 pygrabber==0.2
 pillow==12.3.0  # gui.py: converting camera frames to a Tkinter-displayable image
 google-cloud-storage==2.19.0  # core/cloud_sync.py (spec 087)
+azure-storage-blob==12.24.0  # core/azure_sync.py (spec 095)
+azure-identity==1.19.0  # core/azure_sync.py: DefaultAzureCredential (spec 095)
 pytest==8.4.2

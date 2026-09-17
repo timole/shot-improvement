@@ -27,6 +27,7 @@ import cv2
 import numpy as np
 
 from .log_setup import get_logger
+from .profiling import NULL_PROFILER, Profiler
 
 logger = get_logger("spectrogram")
 
@@ -86,6 +87,7 @@ def add_spectrograms_to_frames(
     extension: str,
     width: int,
     on_progress: Optional[Callable[[int, int], None]] = None,
+    profiler: Profiler = NULL_PROFILER,
 ) -> bool:
     """Rewrites each frame_%06d.<extension> in frames_dir in place,
     stacking [original frame; spectrogram-with-playhead] to double its
@@ -93,22 +95,34 @@ def add_spectrograms_to_frames(
     audio to render.
 
     on_progress(done, total), if given, is called after each frame -
-    same convention as core.pose.annotate_frames_dir (spec 090)."""
+    same convention as core.pose.annotate_frames_dir (spec 090).
+
+    profiler (spec 092), if given, times the whole pass under
+    "add_spectrograms_to_frames", the one-off FFT separately under
+    "spectrogram:fft", and the per-frame loop under
+    "spectrogram:imread"/"spectrogram:playhead"/"spectrogram:vstack"/
+    "spectrogram:imwrite" - a no-op when profiler is NULL_PROFILER."""
     if audio is None or frame_count == 0 or len(audio) == 0:
         logger.warning("add_spectrograms_to_frames: no audio, skipping (frame_count=%d)", frame_count)
         return False
 
-    spectrogram = compute_spectrogram_image(audio, width, SPECTROGRAM_HEIGHT)
-    for i in range(frame_count):
-        path = frames_dir / f"frame_{i:06d}.{extension}"
-        frame = cv2.imread(str(path))
-        if frame is not None:
-            x_fraction = i / max(frame_count - 1, 1)
-            panel = with_playhead(spectrogram, x_fraction)
-            composite = np.vstack([frame, panel])
-            cv2.imwrite(str(path), composite)
-        if on_progress:
-            on_progress(i + 1, frame_count)
+    with profiler.stage("add_spectrograms_to_frames"):
+        with profiler.accum("spectrogram:fft"):
+            spectrogram = compute_spectrogram_image(audio, width, SPECTROGRAM_HEIGHT)
+        for i in range(frame_count):
+            path = frames_dir / f"frame_{i:06d}.{extension}"
+            with profiler.accum("spectrogram:imread"):
+                frame = cv2.imread(str(path))
+            if frame is not None:
+                x_fraction = i / max(frame_count - 1, 1)
+                with profiler.accum("spectrogram:playhead"):
+                    panel = with_playhead(spectrogram, x_fraction)
+                with profiler.accum("spectrogram:vstack"):
+                    composite = np.vstack([frame, panel])
+                with profiler.accum("spectrogram:imwrite"):
+                    cv2.imwrite(str(path), composite)
+            if on_progress:
+                on_progress(i + 1, frame_count)
 
     logger.info("add_spectrograms_to_frames: composited %d frames in %s", frame_count, frames_dir)
     return True

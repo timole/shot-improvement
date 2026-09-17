@@ -21,6 +21,7 @@ from mediapipe.tasks.python import vision
 from mediapipe.tasks.python.core.base_options import BaseOptions
 
 from .log_setup import get_logger
+from .profiling import NULL_PROFILER, Profiler
 
 logger = get_logger("pose")
 
@@ -135,6 +136,7 @@ def annotate_frames_dir(
     extension: str,
     fps: float,
     on_progress: Optional[Callable[[int, int], None]] = None,
+    profiler: Profiler = NULL_PROFILER,
 ) -> None:
     """Runs pose detection over an already-captured sequence of raw
     frame files and writes palm-box-annotated copies into annotated_dir
@@ -153,22 +155,34 @@ def annotate_frames_dir(
     on_progress(done, total), if given, is called after each frame - the
     GUI uses this to show a percentage while this pass runs (spec 090),
     which on this hardware is slow enough (~57ms/frame) to be worth
-    showing progress for rather than a single static status line."""
+    showing progress for rather than a single static status line.
+
+    profiler (spec 092), if given, times the whole pass under
+    "annotate_frames_dir" and breaks the per-frame loop down into
+    "annotate:imread"/"annotate:detect"/"annotate:draw"/"annotate:imwrite"
+    accum() buckets - a no-op when profiler is the default NULL_PROFILER."""
     frame_paths = sorted(raw_dir.glob(f"*.{extension}"))
     total = len(frame_paths)
     if not frame_paths:
         return
-    with PoseDetector() as detector:
-        for i, path in enumerate(frame_paths):
-            frame = cv2.imread(str(path))
-            if frame is None:
+    with profiler.stage("annotate_frames_dir"):
+        with profiler.accum("annotate:model_load"):
+            detector_cm = PoseDetector()
+        with detector_cm as detector:
+            for i, path in enumerate(frame_paths):
+                with profiler.accum("annotate:imread"):
+                    frame = cv2.imread(str(path))
+                if frame is None:
+                    if on_progress:
+                        on_progress(i + 1, total)
+                    continue
+                ts_ms = int(i * 1000 / fps) if fps > 0 else i
+                with profiler.accum("annotate:detect"):
+                    boxes = detector.detect(frame, ts_ms)
+                with profiler.accum("annotate:draw"):
+                    annotated = frame.copy()
+                    draw_palm_boxes(annotated, boxes)
+                with profiler.accum("annotate:imwrite"):
+                    cv2.imwrite(str(annotated_dir / path.name), annotated)
                 if on_progress:
                     on_progress(i + 1, total)
-                continue
-            ts_ms = int(i * 1000 / fps) if fps > 0 else i
-            boxes = detector.detect(frame, ts_ms)
-            annotated = frame.copy()
-            draw_palm_boxes(annotated, boxes)
-            cv2.imwrite(str(annotated_dir / path.name), annotated)
-            if on_progress:
-                on_progress(i + 1, total)

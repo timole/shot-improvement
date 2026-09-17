@@ -1,7 +1,9 @@
 venv/
+server/.venv/
 __pycache__/
 *.pyc
 recordings/
+pending/
 models/
 logs/
 cloud_sync_tombstones.json

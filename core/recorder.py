@@ -13,10 +13,34 @@ with the camera's own nominal fps on this modest hardware (~8fps
 measured, not 30). A video container's own declared frame rate can't
 be corrected after the fact - ffmpeg's "-r" as an input flag is
 silently ignored for an already-timestamped container (verified: it
-produced a 0.77s clip from a 3s recording) - but an image2 sequence
-carries no timing at all, so "-framerate <measured_fps>" at encode time
-is exactly correct, computed as frame_count / real_elapsed_seconds
-after the loop.
+produced a 0.77s clip from a 3s recording) - so encoding starts from a
+raw, untimed image sequence either way.
+
+Spec 097 (audio/video sync fix): encoding that sequence with a single
+constant "-framerate <average_fps>" (the previous approach here)
+silently assumes every frame was captured at even intervals, which is
+false on this hardware - a real 5s/149-frame test recording measured
+per-frame gaps from 0ms to 375ms (mean 34ms, std 38ms), a single-camera
+stall-then-burst pattern typical of DirectShow/USB capture under load.
+Treating that as evenly spaced shifted a frame's displayed time in the
+output by up to ~900ms from when it was really captured (confirmed by
+extracting frames at a known instant and diffing against the raw
+capture at that real timestamp - see specs/097). Since the audio track
+has no equivalent distortion (a continuously-sampled WAV, not
+frame-quantized), this uniform-average-fps encoding was long enough to
+be the audio/video desync users could actually see.
+
+encode_frames_with_audio() now takes each frame's REAL per-frame
+capture timestamp (frame_times, tracked by the capture loops below)
+and builds an ffmpeg concat-demuxer (ffconcat) input where each frame
+carries its own measured on-screen duration, instead of a single
+"-framerate" image2 input. "-fps_mode cfr" then resamples that
+correctly-timed sequence onto a normal constant-rate output stream (so
+browsers/players still get steady, seekable playback) by
+duplicating/dropping frames as needed to match their real timestamps -
+not by re-assuming even spacing. Measured fix: the same 900ms-class
+error dropped to ~16ms (one camera frame's worth of sampling
+granularity) on the same test recording.
 """
 
 from __future__ import annotations
@@ -29,7 +53,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Optional, Sequence
 
 import cv2
 import imageio_ffmpeg
@@ -37,9 +61,9 @@ import sounddevice as sd
 import soundfile as sf
 
 from . import devices
+from .compose import compose_annotated_frames
 from .log_setup import get_logger
-from .pose import annotate_frames_dir
-from .spectrogram import add_spectrograms_to_frames
+from .profiling import NULL_PROFILER, Profiler, dir_size
 
 logger = get_logger("recorder")
 
@@ -186,15 +210,56 @@ def open_camera(index: int) -> cv2.VideoCapture:
     return cap
 
 
+def _write_concat_list(frames_dir: Path, frame_times: Sequence[float]) -> Path:
+    """Writes an ffconcat file (ffmpeg's concat demuxer, "ffconcat
+    version 1.0") giving each captured frame its REAL measured
+    on-screen duration - the gap to the next frame's real capture time
+    - instead of the single constant "-framerate" the image2 demuxer
+    would otherwise force onto every frame. See this module's docstring
+    (spec 097) for why that distinction matters here.
+
+    The concat demuxer documents that the FINAL "duration" directive is
+    ignored (there's no next file to end the last one's display at) -
+    the standard workaround, used here, is to repeat the last file once
+    more as a trailing entry with no duration of its own."""
+    list_path = frames_dir / "concat_list.txt"
+    n = len(frame_times)
+    lines = ["ffconcat version 1.0"]
+    for i in range(n):
+        name = f"frame_{i:06d}.{FRAME_FILE_EXTENSION}"
+        if i + 1 < n:
+            duration = max(frame_times[i + 1] - frame_times[i], 0.001)
+        elif n > 1:
+            duration = max(frame_times[i] - frame_times[i - 1], 0.001)
+        else:
+            duration = 1.0
+        lines.append(f"file '{name}'")
+        lines.append(f"duration {duration:.6f}")
+    lines.append(f"file 'frame_{n - 1:06d}.{FRAME_FILE_EXTENSION}'")
+    list_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return list_path
+
+
 def encode_frames_with_audio(
     frames_dir: Path,
     audio_path: Path,
     out_path: Path,
     actual_fps: float,
     frame_count: int,
+    frame_times: Optional[Sequence[float]] = None,
     on_progress: Optional[Callable[[int, int], None]] = None,
+    profiler: Profiler = NULL_PROFILER,
 ) -> None:
-    """on_progress(done, total), if given, is called as ffmpeg reports
+    """frame_times (spec 097), if given, is each frame's real
+    time.monotonic()-based capture timestamp (seconds from when capture
+    started) - used to build a correctly-timed concat-demuxer input
+    instead of assuming evenly-spaced frames (see module docstring).
+    Falls back to the old constant-"-framerate" image2 input when not
+    given or when its length doesn't match frame_count (e.g. a caller
+    that genuinely has no per-frame timing - shouldn't happen from
+    anything in this app today, all of which tracks it).
+
+    on_progress(done, total), if given, is called as ffmpeg reports
     its own encoded frame count (spec 090) - `-progress pipe:1` writes
     machine-readable `frame=N` lines to stdout; `-nostats` turns off
     the human-readable per-frame line ffmpeg would otherwise write to
@@ -212,15 +277,34 @@ def encode_frames_with_audio(
     while this function is busy reading stdout instead - a dedicated
     thread below drains stderr into a bounded buffer concurrently, so
     ffmpeg is never left blocked trying to write to a full pipe while
-    this function waits on stdout."""
+    this function waits on stdout.
+
+    profiler (spec 092), if given, times the whole call under
+    "encode:<out_path name>". ffmpeg is a child process, so this
+    process's own I/O counters can't see its reads/writes (see
+    core.profiling's module docstring) - reported instead as the
+    frames_dir size (read, resolved at entry - doesn't change during
+    encoding) and out_path's size (write, resolved at exit, once
+    ffmpeg has actually written it)."""
     ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
+    if frame_times is not None and len(frame_times) == frame_count and frame_count > 0:
+        concat_list = _write_concat_list(frames_dir, frame_times)
+        video_input_args = ["-f", "concat", "-safe", "0", "-i", str(concat_list)]
+        # Resamples the real (variable) per-frame timing above onto a
+        # normal constant-rate output (steady, seekable playback) by
+        # duplicating/dropping frames to match their true timestamps -
+        # not by re-assuming even spacing.
+        video_output_args = ["-fps_mode", "cfr", "-r", f"{actual_fps:.3f}"]
+    else:
+        video_input_args = ["-framerate", f"{actual_fps:.3f}", "-i", str(frames_dir / f"frame_%06d.{FRAME_FILE_EXTENSION}")]
+        video_output_args = []
     cmd = [
         ffmpeg_exe, "-y",
-        "-framerate", f"{actual_fps:.3f}",
-        "-i", str(frames_dir / f"frame_%06d.{FRAME_FILE_EXTENSION}"),
+        *video_input_args,
         "-i", str(audio_path),
         "-c:v", "libx264",
         "-pix_fmt", "yuv420p",
+        *video_output_args,
         "-c:a", "aac",
         "-shortest",
         "-nostats",
@@ -228,46 +312,51 @@ def encode_frames_with_audio(
         "-stats_period", "0.1",
         str(out_path),
     ]
-    proc = subprocess.Popen(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        # BELOW_NORMAL_PRIORITY_CLASS (spec 091): ffmpeg's own CPU usage
-        # (libx264 encoding), not the calling Python thread, is the real
-        # cost here - this lets a newer recording's live capture
-        # preferentially get CPU time from Windows' own scheduler while
-        # an older clip is still encoding in the background.
-        creationflags=subprocess.CREATE_NO_WINDOW | subprocess.BELOW_NORMAL_PRIORITY_CLASS,
-    )
-    stderr_chunks: list[str] = []
+    with profiler.stage(
+        f"encode:{out_path.name}",
+        extra_read_bytes=lambda: dir_size(frames_dir)[0],
+        extra_write_bytes=lambda: out_path.stat().st_size,
+    ):
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            # BELOW_NORMAL_PRIORITY_CLASS (spec 091): ffmpeg's own CPU usage
+            # (libx264 encoding), not the calling Python thread, is the real
+            # cost here - this lets a newer recording's live capture
+            # preferentially get CPU time from Windows' own scheduler while
+            # an older clip is still encoding in the background.
+            creationflags=subprocess.CREATE_NO_WINDOW | subprocess.BELOW_NORMAL_PRIORITY_CLASS,
+        )
+        stderr_chunks: list[str] = []
 
-    def drain_stderr() -> None:
-        assert proc.stderr is not None
-        for line in proc.stderr:
-            stderr_chunks.append(line)
+        def drain_stderr() -> None:
+            assert proc.stderr is not None
+            for line in proc.stderr:
+                stderr_chunks.append(line)
 
-    stderr_thread = threading.Thread(target=drain_stderr, name="ffmpeg-stderr-drain", daemon=True)
-    stderr_thread.start()
+        stderr_thread = threading.Thread(target=drain_stderr, name="ffmpeg-stderr-drain", daemon=True)
+        stderr_thread.start()
 
-    assert proc.stdout is not None
-    for line in proc.stdout:
-        line = line.strip()
-        if line.startswith("frame=") and on_progress and frame_count > 0:
-            try:
-                frame_n = int(line.split("=", 1)[1])
-            except ValueError:
-                continue
-            on_progress(min(frame_n, frame_count), frame_count)
-    proc.wait()
-    stderr_thread.join()
-    stderr_text = "".join(stderr_chunks)
-    if proc.returncode != 0:
-        logger.error("ffmpeg encode of %s failed (exit %d): %s", out_path.name, proc.returncode, stderr_text[-2000:])
-        raise subprocess.CalledProcessError(proc.returncode, cmd, output=None, stderr=stderr_text)
-    if on_progress and frame_count > 0:
-        on_progress(frame_count, frame_count)
-    logger.info("Encoded %s (%.1f fps, %d bytes)", out_path.name, actual_fps, out_path.stat().st_size)
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            line = line.strip()
+            if line.startswith("frame=") and on_progress and frame_count > 0:
+                try:
+                    frame_n = int(line.split("=", 1)[1])
+                except ValueError:
+                    continue
+                on_progress(min(frame_n, frame_count), frame_count)
+        proc.wait()
+        stderr_thread.join()
+        stderr_text = "".join(stderr_chunks)
+        if proc.returncode != 0:
+            logger.error("ffmpeg encode of %s failed (exit %d): %s", out_path.name, proc.returncode, stderr_text[-2000:])
+            raise subprocess.CalledProcessError(proc.returncode, cmd, output=None, stderr=stderr_text)
+        if on_progress and frame_count > 0:
+            on_progress(frame_count, frame_count)
+        logger.info("Encoded %s (%.1f fps, %d bytes)", out_path.name, actual_fps, out_path.stat().st_size)
 
 
 def record_clip(
@@ -278,6 +367,7 @@ def record_clip(
     # long post-capture steps below (spec 090) - separate from on_status
     # since those are one-off lines and this fires many times per stage.
     on_progress: Callable[[str, float], None] = lambda stage, fraction: None,
+    profiler: Profiler = NULL_PROFILER,
 ) -> RecordingResult:
     logger.info("record_clip: starting, requested duration=%.1fs", duration_s)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -291,6 +381,11 @@ def record_clip(
         logger.error("record_clip: camera %d (%r) failed to open", video_index, video_name)
         raise RuntimeError(f"Kameraa '{video_name}' ei saatu auki.")
     on_status(f"Resoluutio: {int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))}x{int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))}, {cap.get(cv2.CAP_PROP_FPS):.1f} fps")
+    _fourcc_int = int(cap.get(cv2.CAP_PROP_FOURCC))
+    _fourcc_str = "".join(chr((_fourcc_int >> (8 * i)) & 0xFF) for i in range(4))
+    profiler.note("video_device", f"{video_index}:{video_name}")
+    profiler.note("audio_device", audio_name or "(system default)")
+    profiler.note("negotiated_fourcc", _fourcc_str)
 
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
@@ -299,6 +394,7 @@ def record_clip(
         raw_frames_dir.mkdir()
         annotated_frames_dir.mkdir()
         audio_tmp = tmp_path / "audio.wav"
+        profiler.set_temp_dir(tmp_path)
 
         audio_buffer = sd.rec(
             int(duration_s * SAMPLE_RATE), samplerate=SAMPLE_RATE, channels=1, dtype="int16", device=audio_index,
@@ -307,6 +403,7 @@ def record_clip(
         on_status(f"Nauhoitetaan {duration_s:.1f} sekuntia…")
         frame_count = 0
         failed_reads = 0
+        frame_times: list[float] = []
         # Spec 086: pose inference (~57ms/frame, measured) used to run
         # inside this loop on every frame - it was the single biggest
         # cost limiting real captured fps, which mattered enough to
@@ -315,20 +412,25 @@ def record_clip(
         # runs pose detection afterward, once, over the saved files -
         # see its docstring for the measured effect.
         loop_start = time.monotonic()
-        while time.monotonic() - loop_start < duration_s:
-            ok, frame = cap.read()
-            if not ok:
-                failed_reads += 1
-                if failed_reads in (1, 10, 50) or failed_reads % 100 == 0:
-                    logger.warning("record_clip: camera read failed (count=%d)", failed_reads)
-                continue
-            cv2.imwrite(str(raw_frames_dir / f"frame_{frame_count:06d}.{FRAME_FILE_EXTENSION}"), frame)
-            frame_count += 1
+        with profiler.stage("capture"):
+            while time.monotonic() - loop_start < duration_s:
+                with profiler.accum("capture:cap.read"):
+                    ok, frame = cap.read()
+                if not ok:
+                    failed_reads += 1
+                    if failed_reads in (1, 10, 50) or failed_reads % 100 == 0:
+                        logger.warning("record_clip: camera read failed (count=%d)", failed_reads)
+                    continue
+                with profiler.accum("capture:imwrite"):
+                    cv2.imwrite(str(raw_frames_dir / f"frame_{frame_count:06d}.{FRAME_FILE_EXTENSION}"), frame)
+                frame_times.append(time.monotonic() - loop_start)
+                frame_count += 1
         elapsed_s = time.monotonic() - loop_start
 
-        sd.wait()
-        cap.release()
-        sf.write(audio_tmp, audio_buffer, SAMPLE_RATE)
+        with profiler.stage("audio:wait+write"):
+            sd.wait()
+            cap.release()
+            sf.write(audio_tmp, audio_buffer, SAMPLE_RATE)
 
         if frame_count == 0:
             logger.error("record_clip: zero frames captured (failed_reads=%d)", failed_reads)
@@ -340,30 +442,41 @@ def record_clip(
         timestamp = timestamp_for_filename(datetime.now())
         raw_out = out_dir / f"shot-improvement-{timestamp}.mp4"
         annotated_out = out_dir / f"shot-improvement-{timestamp}-annotated.mp4"
-        on_status("Tunnistetaan käsien asentoja…")
-        annotate_frames_dir(
-            raw_frames_dir, annotated_frames_dir, FRAME_FILE_EXTENSION, actual_fps,
-            on_progress=lambda done, total: on_progress("Tunnistetaan käsien asentoja", done / total if total else 1.0),
-        )
-        on_status("Lisätään spektrogrammi…")
+        on_status("Tunnistetaan käsien asentoja ja lisätään spektrogrammi…")
+        # Spec 092: fused single pass - was annotate_frames_dir() then
+        # add_spectrograms_to_frames() (kept in core/pose.py and
+        # core/spectrogram.py, unused here now, as the pixel-identity
+        # reference for compose_annotated_frames - see its docstring).
         # Spec 085: only the annotated clip grows a spectrogram+playhead
-        # panel underneath (640x480 -> 640x960) - the raw clip stays at
-        # the camera's native resolution. Done here, after capture, since
-        # the full audio buffer (needed for the whole-clip spectrogram)
-        # only exists once sd.rec() has finished.
-        add_spectrograms_to_frames(
-            annotated_frames_dir, audio_buffer, frame_count, FRAME_FILE_EXTENSION, width=FRAME_WIDTH,
-            on_progress=lambda done, total: on_progress("Lisätään spektrogrammi", done / total if total else 1.0),
+        # panel underneath - the raw clip stays at the camera's native
+        # resolution. Done here, after capture, since the full audio
+        # buffer (needed for the whole-clip spectrogram) only exists
+        # once sd.rec() has finished.
+        compose_annotated_frames(
+            raw_frames_dir, annotated_frames_dir, FRAME_FILE_EXTENSION, actual_fps,
+            audio_buffer, frame_count, FRAME_WIDTH, FRAME_HEIGHT,
+            frame_times=frame_times,
+            on_progress=lambda done, total: on_progress("Tunnistetaan käsien asentoja ja spektrogrammi", done / total if total else 1.0),
+            profiler=profiler,
         )
         on_status("Yhdistetään ääni ja kuva…")
         encode_frames_with_audio(
             raw_frames_dir, audio_tmp, raw_out, actual_fps, frame_count,
+            frame_times=frame_times,
             on_progress=lambda done, total: on_progress("Tallennetaan levylle (raaka)", done / total if total else 1.0),
+            profiler=profiler,
         )
         encode_frames_with_audio(
             annotated_frames_dir, audio_tmp, annotated_out, actual_fps, frame_count,
+            frame_times=frame_times,
             on_progress=lambda done, total: on_progress("Tallennetaan levylle", done / total if total else 1.0),
+            profiler=profiler,
         )
+        profiler.note("frame_count", frame_count)
+        profiler.note("actual_fps", round(actual_fps, 2))
+        profiler.note("failed_reads", failed_reads)
+        profiler.note("raw_out_bytes", raw_out.stat().st_size)
+        profiler.note("annotated_out_bytes", annotated_out.stat().st_size)
 
     logger.info("record_clip: done -> %s / %s", raw_out.name, annotated_out.name)
     return RecordingResult(raw_out, annotated_out, video_name, audio_name, frame_count, actual_fps)

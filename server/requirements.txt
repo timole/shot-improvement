@@ -1,0 +1,6 @@
+fastapi==0.141.1
+uvicorn[standard]==0.52.4
+httpx==0.28.1
+PyJWT[crypto]==2.14.0
+azure-storage-blob==12.24.0
+azure-identity==1.19.0
