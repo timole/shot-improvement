@@ -8,3 +8,4 @@ models/
 logs/
 cloud_sync_tombstones.json
 .pytest_cache/
+docs/.$*.bkp
