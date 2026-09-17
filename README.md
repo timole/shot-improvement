@@ -55,6 +55,17 @@ its own repo once it stopped being a small spike and started being a
 standalone app worth versioning on its own. See "Web gallery" below for
 what that move changed.
 
+## Architecture
+
+![Architecture diagram](docs/architecture.png)
+
+Placeholder for now (just "TODO") - a real diagram of the laptop app /
+cloud sync / two galleries will replace it. Editable source:
+[docs/architecture.drawio](docs/architecture.drawio) (open at
+[app.diagrams.net](https://app.diagrams.net) or the draw.io desktop
+app; `docs/architecture.png` is a plain export kept in sync with it by
+hand since GitHub can't render `.drawio` XML inline).
+
 ## Setup
 
 ```
