@@ -61,10 +61,17 @@ what that move changed.
 
 Placeholder for now (just "TODO") - a real diagram of the laptop app /
 cloud sync / two galleries will replace it. Editable source:
-[docs/architecture.drawio](docs/architecture.drawio) (open at
-[app.diagrams.net](https://app.diagrams.net) or the draw.io desktop
-app; `docs/architecture.png` is a plain export kept in sync with it by
-hand since GitHub can't render `.drawio` XML inline).
+[docs/architecture.drawio](docs/architecture.drawio) - open it with
+the [draw.io desktop app](https://github.com/jgraph/drawio-desktop/releases)
+or at [app.diagrams.net](https://app.diagrams.net), edit, save, then
+regenerate `docs/architecture.png` (the plain export the image above
+actually embeds - GitHub can't render `.drawio` XML inline) with:
+
+```
+venv\Scripts\python tools\export_diagrams.py
+```
+
+and commit both files together.
 
 ## Setup
 
