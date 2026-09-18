@@ -113,9 +113,17 @@ short, fixed camera exposure - auto-exposure was found lengthening
 per-frame exposure time under normal room lighting, capping real
 captured fps around 10-14 instead of the negotiated 60; a
 darker/blurrier picture is an accepted tradeoff for keeping fps up),
-and [110](specs/110-shot-improvement-keep-processed-pending-files.md)
+[110](specs/110-shot-improvement-keep-processed-pending-files.md)
 (a processed "Vain nauhoitus" item's raw frames/audio are now archived
-to pending/processed/, not deleted, on explicit standing request).
+to pending/processed/, not deleted, on explicit standing request), and
+[111](specs/111-shot-improvement-spectral-shot-detection.md) (shot
+detection now uses non-maximum suppression plus a spectral gate - a
+real event's FFT energy in 2-8kHz, not just its loudness - instead of
+spec 098's "cluster a contiguous loud span into one event", and
+pairing now matches a shot to a hit only within a physically plausible
+puck-travel window instead of blindly pairing every two consecutive
+claps; both fixes were found and validated against real Audacity-
+marked ground truth).
 
 (Two earlier browser-based versions, specs 078 and 079, were built
 first and then replaced entirely — the original laptop this was built

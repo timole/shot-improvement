@@ -265,7 +265,8 @@ def compose_annotated_frames(
             # redrawn per frame.
             claps = detect_claps(audio, SAMPLE_RATE)
             clap_times = [t for t, _peak_rms in claps]
-            pairs, _trailing_unpaired = pair_claps(clap_times)
+            shots = pair_claps(clap_times)
+            pairs = [(shot_t, hit_t) for shot_t, hit_t in shots if hit_t is not None]
             draw_pair_annotations(spectrogram, pairs, audio_duration_s)
             claps_band = render_claps_band(width, CLAPS_BAND_HEIGHT, clap_times, audio_duration_s)
 
@@ -374,16 +375,15 @@ def save_shot_images(
     out_dir: Path,
     filename_stem: str,
 ) -> list[ShotImage]:
-    """For each detected "shot" - the first half of every chronologically
-    paired shot/hit clap (core.claps.pair_claps), plus a trailing
-    unpaired final shot if the clip has one - saves a JPEG stacking the
-    RAW camera frame closest to that shot's real peak timestamp (native
-    capture resolution, hand boxes - spec 102 - and the computed puck
-    speed burned in, white, black-outlined text at the bottom) on top of
-    a spectrogram strip (spec 106) marking this shot's instant with a
-    red playhead, same visual language as the -annotated.mp4's own
-    spectrogram band. The trailing unpaired shot (no corresponding hit,
-    so no computable speed) still gets an image, with hand boxes but no
+    """For each detected shot (core.claps.pair_claps, spec 111 - every
+    shot in the clip, whether or not it has a matching hit) - saves a
+    JPEG stacking the RAW camera frame closest to that shot's real peak
+    timestamp (native capture resolution, hand boxes - spec 102 - and
+    the computed puck speed burned in, white, black-outlined text at
+    the bottom) on top of a spectrogram strip (spec 106) marking this
+    shot's instant with a red playhead, same visual language as the
+    -annotated.mp4's own spectrogram band. A shot with no matching hit
+    (no computable speed) still gets an image, with hand boxes but no
     speed text; its playhead still shows on the strip.
 
     The strip - one per call, not per shot, since it's identical content
@@ -405,11 +405,7 @@ def save_shot_images(
     paid once per call, not once per frame."""
     claps = detect_claps(audio, sample_rate)
     clap_times = [t for t, _peak_rms in claps]
-    pairs, trailing = pair_claps(clap_times)
-
-    shots: list[tuple[float, Optional[float]]] = list(pairs)
-    if trailing is not None:
-        shots.append((trailing, None))
+    shots = pair_claps(clap_times)
 
     frame_paths = sorted(raw_dir.glob(f"*.{extension}"))
     frame_times_arr = np.asarray(frame_times, dtype=np.float64)
@@ -426,6 +422,7 @@ def save_shot_images(
         return saved
     strip_width = first_frame.shape[1]
     spectrogram = compute_spectrogram_image(audio, strip_width, SHOT_SPECTROGRAM_HEIGHT)
+    pairs = [(shot_t, hit_t) for shot_t, hit_t in shots if hit_t is not None]
     draw_pair_annotations(spectrogram, pairs, audio_duration_s)
 
     with PoseDetector() as detector:

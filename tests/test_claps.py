@@ -82,16 +82,30 @@ def test_detect_claps_merges_a_decay_tail_into_one_event() -> None:
     assert len(claps) == 1
 
 
-def test_detect_claps_keeps_two_events_a_real_gap_apart() -> None:
-    """Two distinct events 0.40s apart (the real recording's closest
-    genuine pair, per spec 098) must stay separate."""
+def test_detect_claps_merges_a_close_shot_like_pair_too() -> None:
+    """Spec 111: two events 0.40s apart - both loud and spectrally
+    shot-like (a real stick "windup" tap immediately before its own
+    shot, measured 0.36-0.43s apart on a real clip) - are ALSO merged
+    into one, now that MIN_SEPARATION_S was widened from spec 098's
+    0.25s to 0.5s specifically for this case. Only the louder of the
+    two survives."""
     audio = _synth([1.00, 1.40], duration_s=3.0)
+
+    claps = detect_claps(audio, SAMPLE_RATE)
+
+    assert len(claps) == 1
+
+
+def test_detect_claps_keeps_two_events_a_real_gap_apart() -> None:
+    """Two distinct events comfortably past MIN_SEPARATION_S (0.5s)
+    must stay separate."""
+    audio = _synth([1.00, 1.70], duration_s=3.0)
 
     claps = detect_claps(audio, SAMPLE_RATE)
     times = [t for t, _ in claps]
 
     assert len(times) == 2
-    assert times[1] - times[0] == pytest.approx(0.40, abs=0.03)
+    assert times[1] - times[0] == pytest.approx(0.70, abs=0.03)
 
 
 def test_detect_claps_rejects_wall_of_noise() -> None:
@@ -119,27 +133,46 @@ def test_detect_claps_handles_empty_and_short_input() -> None:
 
 
 def test_pair_claps_empty() -> None:
-    assert pair_claps([]) == ([], None)
+    assert pair_claps([]) == []
 
 
-def test_pair_claps_single_trailing() -> None:
-    assert pair_claps([1.0]) == ([], 1.0)
+def test_pair_claps_single_shot_has_no_hit() -> None:
+    assert pair_claps([1.0]) == [(1.0, None)]
 
 
-def test_pair_claps_two_forms_one_pair() -> None:
-    assert pair_claps([1.0, 2.0]) == ([(1.0, 2.0)], None)
+def test_pair_claps_two_within_window_forms_one_pair() -> None:
+    # gap = 2.5s, within [MIN_HIT_DELAY_S, MAX_HIT_DELAY_S] (1.5-4.0s)
+    assert pair_claps([1.0, 3.5]) == [(1.0, 3.5)]
 
 
 def test_pair_claps_four_forms_two_pairs() -> None:
-    pairs, trailing = pair_claps([1.0, 2.0, 5.0, 6.0])
-    assert pairs == [(1.0, 2.0), (5.0, 6.0)]
-    assert trailing is None
+    assert pair_claps([1.0, 3.5, 10.0, 12.5]) == [(1.0, 3.5), (10.0, 12.5)]
 
 
-def test_pair_claps_five_has_trailing_unpaired() -> None:
-    pairs, trailing = pair_claps([1.0, 2.0, 5.0, 6.0, 9.0])
-    assert pairs == [(1.0, 2.0), (5.0, 6.0)]
-    assert trailing == 9.0
+def test_pair_claps_trailing_shot_with_no_hit() -> None:
+    assert pair_claps([1.0, 3.5, 10.0]) == [(1.0, 3.5), (10.0, None)]
+
+
+def test_pair_claps_gap_too_short_leaves_both_unpaired() -> None:
+    """0.8s is too soon to be a real hit (spec 111's MIN_HIT_DELAY_S) -
+    the first clap gets no hit, and the second one starts its own
+    (also ultimately unpaired) shot rather than being silently
+    discarded."""
+    assert pair_claps([1.0, 1.8]) == [(1.0, None), (1.8, None)]
+
+
+def test_pair_claps_gap_too_long_leaves_both_unpaired() -> None:
+    """5.0s exceeds MAX_HIT_DELAY_S - too long to be this shot's hit."""
+    assert pair_claps([1.0, 6.0]) == [(1.0, None), (6.0, None)]
+
+
+def test_pair_claps_unpaired_shot_can_be_in_the_middle_not_just_trailing() -> None:
+    """Spec 111: unlike spec 098's original "only the very last clap
+    can be unpaired" behavior, a shot with no plausible hit anywhere in
+    the clip is left unpaired right where it happens."""
+    shots = pair_claps([1.0, 3.5, 10.0, 20.0, 22.3])
+
+    assert shots == [(1.0, 3.5), (10.0, None), (20.0, 22.3)]
 
 
 def test_puck_speed_kmh_known_value() -> None:
@@ -156,15 +189,51 @@ def test_puck_speed_kmh_custom_distance() -> None:
 
 
 def test_real_clip_event_list_pairs_to_plausible_speeds() -> None:
-    """Pins the real-world numbers validated during spec 098's planning
-    against recordings/shot-improvement-20260915110833-annotated-fixed.mp4
-    - a future change to the algorithm shouldn't silently break this
-    clip's own known-good result."""
+    """Pins the real-world numbers from two independently-validated real
+    recordings against a future algorithm change:
+    recordings/shot-improvement-20260915110833-annotated-fixed.mp4
+    (spec 098's own clip) and this session's own
+    shot-improvement-20260918133853.mp4 (spec 111, with real
+    user-marked ground truth: 6 shots, only 2 with an audible hit).
+
+    Spec 111's windowed pairing (replacing spec 098's naive "pair every
+    two consecutive claps") also fixes what spec 098's own docstring
+    called an "accepted limitation": the old index-based pairing forced
+    17.090 and 26.720 into implausible ~140-208 km/h pairs; the new
+    pairing correctly leaves both unpaired (no clap lands in a
+    physically plausible hit window after either) and finds two
+    MORE genuinely plausible pairs instead."""
     real_event_times = [6.867, 10.037, 10.472, 14.048, 17.090, 18.077, 21.200, 22.192, 25.275, 26.720]
 
-    pairs, trailing = pair_claps(real_event_times)
+    shots = pair_claps(real_event_times)
+    pairs = [(shot_t, hit_t) for shot_t, hit_t in shots if hit_t is not None]
+    unpaired = [shot_t for shot_t, hit_t in shots if hit_t is None]
 
-    assert trailing is None
-    assert len(pairs) == 5
+    assert unpaired == [17.090, 26.720]
+    assert len(pairs) == 4
     assert puck_speed_kmh(*pairs[0]) == pytest.approx(64.7, abs=0.5)
     assert puck_speed_kmh(*pairs[1]) == pytest.approx(57.4, abs=0.5)
+    assert puck_speed_kmh(*pairs[2]) == pytest.approx(65.7, abs=0.5)
+    assert puck_speed_kmh(*pairs[3]) == pytest.approx(66.6, abs=0.5)
+
+
+def test_real_clip_two_ground_truth_pairs_and_four_unpaired_shots() -> None:
+    """This session's own recording (spec 111), real Audacity-marked
+    ground truth: 6 shots at 3.238/7.365/11.302/15.429/19.556/23.714s,
+    only the first two with an audible hit (6.191s, 10.191s). The
+    detector's own real output on this clip's audio lands a few tens of
+    ms from those hand marks (RMS-envelope granularity, ~5.8ms windows,
+    vs. a human eyeballing a waveform) - this test pins the DETECTOR's
+    own real event list (not the hand marks) straight into pair_claps,
+    so a future change can't silently drop back to 2 shots or invent a
+    hit for one of the 4 that has none."""
+    detected_event_times = [3.216, 6.124, 7.338, 10.182, 11.326, 15.476, 19.551, 23.719]
+
+    shots = pair_claps(detected_event_times)
+    pairs = [(shot_t, hit_t) for shot_t, hit_t in shots if hit_t is not None]
+    unpaired = [shot_t for shot_t, hit_t in shots if hit_t is None]
+
+    assert len(pairs) == 2
+    assert unpaired == [11.326, 15.476, 19.551, 23.719]
+    assert puck_speed_kmh(*pairs[0]) == pytest.approx(70.6, abs=0.5)
+    assert puck_speed_kmh(*pairs[1]) == pytest.approx(72.1, abs=0.5)
