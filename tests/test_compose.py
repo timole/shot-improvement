@@ -17,9 +17,11 @@ from core.compose import (
     CLAPS_BAND_BG_BGR,
     PAIR_LINE_COLOR_BGR,
     PAIR_LINE_Y,
+    SHOT_CLIP_PREROLL_S,
     SHOT_IMAGE_LABEL_COLOR_BGR,
     SHOT_SPECTROGRAM_HEIGHT,
     _x_for_time,
+    build_shot_clip,
     composite_into,
     draw_pair_annotations,
     render_claps_band,
@@ -339,3 +341,92 @@ def test_save_shot_images_returns_empty_list_when_no_claps(tmp_path) -> None:
 
     assert saved == []
     assert list(out_dir.glob("*.jpg")) == []
+
+
+def _write_wav(path, duration_s, sample_rate=44100) -> None:
+    import soundfile as sf
+
+    audio = np.zeros(int(duration_s * sample_rate), dtype=np.int16)
+    sf.write(str(path), audio, sample_rate)
+
+
+def test_build_shot_clip_spans_roughly_the_preroll_to_hit_window(tmp_path) -> None:
+    import cv2
+
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    frame_count, duration_s = 30, 6.0
+    _write_indexed_frames(raw_dir, frame_count)
+    frame_times = [i * duration_s / (frame_count - 1) for i in range(frame_count)]
+    audio_path = tmp_path / "audio.wav"
+    _write_wav(audio_path, duration_s)
+    out_path = tmp_path / "clip.mp4"
+
+    shot_t, hit_t = 3.0, 4.0
+    ok = build_shot_clip(raw_dir, "bmp", frame_times, audio_path, actual_fps=5.0, shot_t=shot_t, hit_t=hit_t, out_path=out_path)
+
+    assert ok is True
+    assert out_path.exists()
+    cap = cv2.VideoCapture(str(out_path))
+    try:
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        total_frames = cap.get(cv2.CAP_PROP_FRAME_COUNT)
+        clip_duration_s = total_frames / fps if fps > 0 else 0.0
+    finally:
+        cap.release()
+    expected = hit_t - (shot_t - SHOT_CLIP_PREROLL_S)
+    assert clip_duration_s == pytest.approx(expected, abs=0.5)
+
+
+def test_build_shot_clip_unpaired_shot_plays_to_recording_end(tmp_path) -> None:
+    import cv2
+
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    frame_count, duration_s = 30, 6.0
+    _write_indexed_frames(raw_dir, frame_count)
+    frame_times = [i * duration_s / (frame_count - 1) for i in range(frame_count)]
+    audio_path = tmp_path / "audio.wav"
+    _write_wav(audio_path, duration_s)
+    out_path = tmp_path / "clip.mp4"
+
+    shot_t = 5.0
+    ok = build_shot_clip(raw_dir, "bmp", frame_times, audio_path, actual_fps=5.0, shot_t=shot_t, hit_t=None, out_path=out_path)
+
+    assert ok is True
+    cap = cv2.VideoCapture(str(out_path))
+    try:
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        total_frames = cap.get(cv2.CAP_PROP_FRAME_COUNT)
+        clip_duration_s = total_frames / fps if fps > 0 else 0.0
+    finally:
+        cap.release()
+    expected = frame_times[-1] - (shot_t - SHOT_CLIP_PREROLL_S)
+    assert clip_duration_s == pytest.approx(expected, abs=0.5)
+
+
+def test_build_shot_clip_returns_false_when_raw_dir_missing(tmp_path) -> None:
+    raw_dir = tmp_path / "raw"  # never created
+    audio_path = tmp_path / "audio.wav"
+    _write_wav(audio_path, 6.0)
+    out_path = tmp_path / "clip.mp4"
+    frame_times = [i * 6.0 / 29 for i in range(30)]
+
+    ok = build_shot_clip(raw_dir, "bmp", frame_times, audio_path, actual_fps=5.0, shot_t=3.0, hit_t=4.0, out_path=out_path)
+
+    assert ok is False
+    assert not out_path.exists()
+
+
+def test_build_shot_clip_returns_false_on_frame_count_mismatch(tmp_path) -> None:
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    _write_indexed_frames(raw_dir, 10)  # fewer files than frame_times below expects
+    audio_path = tmp_path / "audio.wav"
+    _write_wav(audio_path, 6.0)
+    out_path = tmp_path / "clip.mp4"
+    frame_times = [i * 6.0 / 29 for i in range(30)]
+
+    ok = build_shot_clip(raw_dir, "bmp", frame_times, audio_path, actual_fps=5.0, shot_t=3.0, hit_t=4.0, out_path=out_path)
+
+    assert ok is False

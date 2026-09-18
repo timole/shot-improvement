@@ -84,6 +84,19 @@ class RecordingResult:
     tmp_dir_path: Optional[Path] = None
 
 
+@dataclass
+class ShotSource:
+    """Spec 107: enough to lazily build a raw playback clip for any shot
+    from on_shots_ready's own list, later - dispatched alongside it so
+    the GUI never has to guess where a recording's raw frames/audio
+    live in either mode (a normal recording's temp dir vs a deferred
+    recording's pending/<ts> entry)."""
+    raw_dir: Path
+    audio_path: Path
+    frame_times: list[float]
+    actual_fps: float
+
+
 class LiveSession:
     def __init__(self) -> None:
         self.video_index, self.video_name = pick_video_device()
@@ -113,7 +126,7 @@ class LiveSession:
         self._out_dir: Optional[Path] = None
         self._audio_buffer: Optional[np.ndarray] = None
         self._on_recording_done: Optional[Callable[[Optional[RecordingResult]], None]] = None
-        self._on_shots_ready: Callable[[list[ShotImage]], None] = lambda shots: None
+        self._on_shots_ready: Callable[[list[ShotImage], ShotSource], None] = lambda shots, source: None
         self._consecutive_read_failures = 0
         # Spec 091: a count, not a bool - a new recording can now start
         # (see start_recording()) while an older one's background worker
@@ -227,7 +240,7 @@ class LiveSession:
         on_raw_ready: Callable[[Path], None] = lambda raw_path: None,
         defer_processing: bool = False,
         on_deferred_saved: Callable[[bool], None] = lambda ok: None,
-        on_shots_ready: Callable[[list[ShotImage]], None] = lambda shots: None,
+        on_shots_ready: Callable[[list[ShotImage], ShotSource], None] = lambda shots, source: None,
     ) -> None:
         """dispatch, if given, is used to run on_done back on whatever
         thread called start_recording (e.g. Tkinter's root.after(0, fn))
@@ -246,13 +259,17 @@ class LiveSession:
         the new recording in its list and re-enable the record button
         immediately, rather than waiting for on_done.
 
-        on_shots_ready(shots), if given, is called (also via dispatch)
-        once save_shot_images() has produced its list of ShotImages
-        (spec 106) - BEFORE on_raw_ready in the normal path (the whole
-        point: this is the fast, useful result, ready before the much
-        slower raw/annotated encodes even start), and, in
+        on_shots_ready(shots, source), if given, is called (also via
+        dispatch) once save_shot_images() has produced its list of
+        ShotImages (spec 106) - BEFORE on_raw_ready in the normal path
+        (the whole point: this is the fast, useful result, ready before
+        the much slower raw/annotated encodes even start), and, in
         defer_processing mode, shortly after on_deferred_saved with no
         mp4 involved at all. Empty list means no shots were detected.
+        source (spec 107) is a ShotSource pointing at this recording's
+        raw frames/audio, for lazily building a per-shot raw playback
+        clip later (core.compose.build_shot_clip) - present even when
+        shots is empty.
 
         defer_processing (spec 093): when True, this recording's frames
         are captured exactly as normal, but NO processing (pose
@@ -463,7 +480,7 @@ class LiveSession:
     def _finish_immediate_recording(
         self, elapsed_s: float, frame_count: int, frame_times: list[float], audio_buffer: np.ndarray,
         dispatch: Callable[[Callable[[], None]], None], timestamp: str,
-        on_shots_ready: Callable[[list[ShotImage]], None],
+        on_shots_ready: Callable[[list[ShotImage], ShotSource], None],
     ) -> None:
         """The normal path: write audio -> shot images -> on_shots_ready
         (spec 106, moved ahead of the encodes below - it's the fast,
@@ -518,7 +535,8 @@ class LiveSession:
                             raw_dir, FRAME_FILE_EXTENSION, frame_times, audio_buffer, SAMPLE_RATE,
                             out_dir, f"shot-improvement-{timestamp}",
                         )
-                    dispatch(lambda: on_shots_ready(shots))
+                    source = ShotSource(raw_dir, audio_tmp, frame_times, actual_fps)
+                    dispatch(lambda: on_shots_ready(shots, source))
 
                     # Spec 091: the raw clip needs no pose annotation at
                     # all, so it's encoded next and handed to
@@ -589,7 +607,7 @@ class LiveSession:
     def _finish_deferred_recording(
         self, elapsed_s: float, frame_count: int, frame_times: list[float], audio_buffer: np.ndarray,
         dispatch: Callable[[Callable[[], None]], None],
-        on_shots_ready: Callable[[list[ShotImage]], None],
+        on_shots_ready: Callable[[list[ShotImage], ShotSource], None],
     ) -> None:
         """Spec 093: "Vain nauhoitus" mode - persists raw frames + audio
         to a durable pending/ entry, with NO video processing (pose
@@ -642,7 +660,8 @@ class LiveSession:
                             raw_dir, FRAME_FILE_EXTENSION, frame_times, audio_buffer, SAMPLE_RATE,
                             out_dir, f"shot-improvement-{timestamp}",
                         )
-                        dispatch(lambda: on_shots_ready(shots))
+                        source = ShotSource(raw_dir, pending_dir / "audio.wav", frame_times, actual_fps)
+                        dispatch(lambda: on_shots_ready(shots, source))
                     except Exception:
                         # The recording itself is already safely persisted
                         # to pending/ at this point (ok is already True) -

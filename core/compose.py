@@ -41,15 +41,23 @@ strip below, same shape as the -annotated.mp4's own two bands) and a
 typed ShotImage return value, so the GUI can show these right after a
 recording finishes - well before the (much slower) full annotated
 video is ready - and browse between them.
+
+Spec 107 adds build_shot_clip(): a short RAW (unannotated) clip spanning
+from just before a shot to its paired hit, built lazily and on demand
+(not part of the eager save_shot_images pass above) so a "Play" button
+next to a shot can show what actually happened.
 """
 
 from __future__ import annotations
 
+import shutil
+import tempfile
 from pathlib import Path
 from typing import Callable, NamedTuple, Optional, Sequence
 
 import cv2
 import numpy as np
+import soundfile as sf
 
 from .claps import detect_claps, pair_claps, puck_speed_kmh
 from .log_setup import get_logger
@@ -327,6 +335,10 @@ SHOT_IMAGE_LABEL_COLOR_BGR = (255, 255, 255)  # white
 SHOT_IMAGE_MARGIN_BOTTOM = 30
 SHOT_IMAGE_JPEG_QUALITY = 92
 SHOT_SPECTROGRAM_HEIGHT = 200
+# Spec 107: how long before the shot's own recognized instant the raw
+# playback clip starts - enough to see the wind-up, not so much that a
+# quiet stretch of the recording dominates a short clip.
+SHOT_CLIP_PREROLL_S = 2.0
 
 
 class ShotImage(NamedTuple):
@@ -334,6 +346,11 @@ class ShotImage(NamedTuple):
     path: Path
     time_s: float
     speed_kmh: Optional[float]
+    # Spec 107: the paired hit's own timestamp (None for a trailing
+    # unpaired shot) - the GUI needs this as the raw-clip playback
+    # window's end boundary; re-deriving it from speed_kmh would lose
+    # precision for no reason when it's already known here.
+    hit_t: Optional[float]
 
 
 def _draw_bottom_centered_label(frame: np.ndarray, text: str, font_px: int, color) -> None:
@@ -439,7 +456,84 @@ def save_shot_images(
 
             out_path = out_dir / f"{filename_stem}-shot-{i:02d}.jpg"
             cv2.imwrite(str(out_path), composite, [cv2.IMWRITE_JPEG_QUALITY, SHOT_IMAGE_JPEG_QUALITY])
-            saved.append(ShotImage(index=i, path=out_path, time_s=shot_t, speed_kmh=speed_kmh))
+            saved.append(ShotImage(index=i, path=out_path, time_s=shot_t, speed_kmh=speed_kmh, hit_t=hit_t))
 
     logger.info("save_shot_images: saved %d shot image(s) for %s", len(saved), filename_stem)
     return saved
+
+
+def build_shot_clip(
+    raw_dir: Path,
+    extension: str,
+    frame_times: Sequence[float],
+    audio_path: Path,
+    actual_fps: float,
+    shot_t: float,
+    hit_t: Optional[float],
+    out_path: Path,
+) -> bool:
+    """Builds a short RAW (unannotated) clip at out_path, spanning
+    [shot_t - SHOT_CLIP_PREROLL_S, hit_t] - or, for a trailing unpaired
+    shot (hit_t is None), through to the end of the recording
+    (frame_times[-1]), since the raw footage is still worth watching
+    even without a computed speed.
+
+    Lazy/on-demand (spec 107) - called from a Play click, not as part
+    of save_shot_images' own eager pass, so it must tolerate the
+    source raw frames already being gone (a normal recording's temp
+    dir was cleaned up, or a deferred recording's pending/ entry was
+    already processed): returns False in that case rather than
+    raising, so the caller can show a clear message instead of a
+    crash. Returns True once out_path has been written.
+
+    core.recorder.encode_frames_with_audio's concat-list builder
+    assumes frames are named frame_000000.<ext> upward from index 0
+    (see its own _write_concat_list) - not whatever the source
+    raw_dir's real filenames are - so the selected frames are copied
+    into a fresh temp dir, renamed sequentially, with frame_times
+    shifted to start at ~0, before encoding."""
+    from .recorder import encode_frames_with_audio  # local: avoids a compose<->recorder import cycle
+
+    if not raw_dir.exists():
+        logger.warning("build_shot_clip: %s no longer exists", raw_dir)
+        return False
+
+    frame_paths = sorted(raw_dir.glob(f"*.{extension}"))
+    frame_times_arr = np.asarray(frame_times, dtype=np.float64)
+    if len(frame_paths) == 0 or len(frame_paths) != len(frame_times_arr):
+        logger.warning(
+            "build_shot_clip: frame_times/frame_paths mismatch for %s (%d files, %d times)",
+            raw_dir, len(frame_paths), len(frame_times_arr),
+        )
+        return False
+
+    start_t = max(0.0, shot_t - SHOT_CLIP_PREROLL_S)
+    end_t = hit_t if hit_t is not None else float(frame_times_arr[-1])
+    selected = np.where((frame_times_arr >= start_t) & (frame_times_arr <= end_t))[0]
+    if len(selected) == 0:
+        logger.warning("build_shot_clip: no raw frames in [%.2f, %.2f]", start_t, end_t)
+        return False
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        subset_dir = tmp_path / "raw"
+        subset_dir.mkdir()
+        subset_times = []
+        for new_i, old_i in enumerate(selected):
+            shutil.copyfile(frame_paths[old_i], subset_dir / f"frame_{new_i:06d}.{extension}")
+            subset_times.append(float(frame_times_arr[old_i]) - start_t)
+
+        audio, file_sample_rate = sf.read(str(audio_path), dtype="int16")
+        start_sample = int(start_t * file_sample_rate)
+        end_sample = int(end_t * file_sample_rate)
+        subset_audio_path = tmp_path / "audio.wav"
+        sf.write(subset_audio_path, audio[start_sample:end_sample], file_sample_rate)
+
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        encode_frames_with_audio(
+            subset_dir, subset_audio_path, out_path, actual_fps, len(selected),
+            frame_times=subset_times,
+        )
+
+    logger.info("build_shot_clip: built %s ([%.2f, %.2f], %d frames)", out_path, start_t, end_t, len(selected))
+    return True

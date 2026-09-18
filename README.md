@@ -99,7 +99,11 @@ detected shots - camera frame, hand boxes, spectrogram strip, km/h -
 right after a recording finishes, browsable in a list below the
 preview, well before the slower background video encode completes;
 "Vain nauhoitus" mode gets the same shot list without producing an
-mp4 at all).
+mp4 at all), and
+[107](specs/107-shot-improvement-raw-shot-playback.md) (a "Play"
+button next to each shot's speed plays the raw, unannotated footage
+from 2s before the shot through to its paired hit, built on demand
+and cached per shot; finishing it returns to the shot list).
 
 (Two earlier browser-based versions, specs 078 and 079, were built
 first and then replaced entirely — the original laptop this was built

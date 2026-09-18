@@ -11,6 +11,8 @@ Run: venv\\Scripts\\python gui.py
 from __future__ import annotations
 
 import re
+import shutil
+import tempfile
 import threading
 import time
 import tkinter as tk
@@ -24,12 +26,12 @@ import cv2
 from PIL import Image, ImageTk
 
 from core import azure_sync, cloud_sync, devices, pending
-from core.compose import ShotImage
+from core.compose import ShotImage, build_shot_clip
 from core.log_setup import get_logger, setup_logging
 from core.playback import SKIP_SECONDS, SPEED_OPTIONS, ClipPlayer, format_time
-from core.recorder import FRAME_HEIGHT, FRAME_WIDTH, RECORDINGS_DIR
+from core.recorder import FRAME_FILE_EXTENSION, FRAME_HEIGHT, FRAME_WIDTH, RECORDINGS_DIR
 from core.segmentation import BackgroundRemover
-from core.session import LiveSession, RecordingResult
+from core.session import LiveSession, RecordingResult, ShotSource
 
 setup_logging()
 logger = get_logger("gui")
@@ -119,6 +121,16 @@ class App:
         # processed pending item) finishes - see _on_shots_ready,
         # _show_shot, _exit_shots_mode.
         self._shots: list[ShotImage] = []
+        # Spec 107: where this shot list's raw frames/audio live, for
+        # building a per-shot raw playback clip on demand - see
+        # on_play_raw_shot_click. _raw_clip_cache avoids rebuilding a
+        # clip already built this session; _shots_playback_active marks
+        # that the currently-open ClipPlayer is one of these (so
+        # finishing/leaving it returns to the shot list, not live).
+        self._shot_source: Optional[ShotSource] = None
+        self._raw_clip_cache: dict[int, Path] = {}
+        self._shots_playback_active = False
+        self._building_raw_clip = False
 
         # Two columns: left_frame holds every control (camera/device
         # pickers, record row, transport buttons, speed/volume/
@@ -274,9 +286,8 @@ class App:
         ttk.Button(transport, text="■", width=3, command=self.on_stop_click).pack(side="left", padx=1)
         ttk.Button(transport, text="5s⏩", width=4, command=self.on_skip_forward_click).pack(side="left", padx=1)
         ttk.Button(transport, text="+1 ruutu", width=8, command=self.on_next_frame_click).pack(side="left", padx=1)
-        ttk.Button(transport, text="Takaisin livekuvaan", command=self.on_back_to_live_click).pack(
-            side="left", padx=(12, 0)
-        )
+        self.back_button = ttk.Button(transport, text="Takaisin livekuvaan", command=self.on_back_to_live_click)
+        self.back_button.pack(side="left", padx=(12, 0))
 
         self.scrub_var = tk.DoubleVar(value=0.0)
         self.scrub_scale = ttk.Scale(
@@ -355,6 +366,19 @@ class App:
         # playback's timeline_frame.
         self.shots_frame = ttk.Frame(timeline_root)
         ttk.Label(self.shots_frame, text="Laukaukset:").pack(anchor="w", padx=8)
+
+        # Spec 107: the currently-shown shot's speed as text, and a
+        # button to play the raw (unannotated) footage behind it - see
+        # on_play_raw_shot_click.
+        speed_row = ttk.Frame(self.shots_frame)
+        speed_row.pack(fill="x", padx=8, pady=(0, 4))
+        self.shot_speed_var = tk.StringVar(value="")
+        ttk.Label(speed_row, textvariable=self.shot_speed_var).pack(side="left")
+        self.shot_play_button = ttk.Button(
+            speed_row, text="▶ Toista raakakuvaa", command=self.on_play_raw_shot_click,
+        )
+        self.shot_play_button.pack(side="left", padx=(12, 0))
+
         inner = ttk.Frame(self.shots_frame)
         inner.pack(fill="both", expand=True, padx=8, pady=(0, 4))
         self.shots_tree = ttk.Treeview(
@@ -694,8 +718,10 @@ class App:
     # for is visible immediately instead of after a slow background
     # encode.
 
-    def _on_shots_ready(self, shots: list[ShotImage]) -> None:
+    def _on_shots_ready(self, shots: list[ShotImage], source: ShotSource) -> None:
         self._shots = shots
+        self._shot_source = source
+        self._raw_clip_cache = {}
         self.shots_tree.delete(*self.shots_tree.get_children())
         if not shots:
             self._set_status_if_idle("Ei tunnistettuja laukauksia.")
@@ -721,6 +747,8 @@ class App:
         h, w = frame.shape[:2]
         self._display_size = (640, round(640 * h / w))
         self._show_frame(frame)
+        speed_label = f"{round(shot.speed_kmh)} km/h" if shot.speed_kmh is not None else "ei laskettavissa"
+        self.shot_speed_var.set(f"Nopeus: {speed_label}")
 
     def _exit_shots_mode(self) -> None:
         if self._mode != "shots":
@@ -728,6 +756,65 @@ class App:
         self.shots_frame.pack_forget()
         self._display_size = DISPLAY_SIZE
         self._mode = "live"
+        self.status_var.set("Valmis.")
+
+    # --- raw shot playback (spec 107) -------------------------------------
+    #
+    # "Play" next to a shot's speed builds (or reuses a cached) short
+    # RAW clip spanning from just before the shot to its paired hit, and
+    # plays it through the same transport controls a saved recording
+    # uses (load_and_play) - finishing it, or clicking back, returns to
+    # the shot list rather than the live feed (see _shots_playback_active).
+
+    def on_play_raw_shot_click(self) -> None:
+        selection = self.shots_tree.selection()
+        if not selection or self._shot_source is None or self._building_raw_clip:
+            return
+        index = int(selection[0])
+        cached = self._raw_clip_cache.get(index)
+        if cached is not None:
+            self._play_raw_shot_clip(cached)
+            return
+
+        shot = self._shots[index]
+        source = self._shot_source
+        self._building_raw_clip = True
+        self.shot_play_button.config(state="disabled")
+        self._set_status_if_idle("Valmistellaan raakavideota…")
+
+        def worker() -> None:
+            out_path = Path(tempfile.mkdtemp(prefix="shot-improvement-rawclip-")) / "clip.mp4"
+            try:
+                ok = build_shot_clip(
+                    source.raw_dir, FRAME_FILE_EXTENSION, source.frame_times, source.audio_path,
+                    source.actual_fps, shot.time_s, shot.hit_t, out_path,
+                )
+            except Exception:
+                logger.exception("on_play_raw_shot_click: build_shot_clip failed")
+                ok = False
+            self.root.after(0, lambda: self._on_raw_shot_clip_built(index, out_path if ok else None))
+
+        threading.Thread(target=worker, name="shot-improvement-rawclip", daemon=True).start()
+
+    def _on_raw_shot_clip_built(self, index: int, path: Optional[Path]) -> None:
+        self._building_raw_clip = False
+        self.shot_play_button.config(state="normal")
+        if path is None:
+            self._set_status_if_idle("Raakadataa ei ole enää saatavilla tälle laukaukselle.")
+            return
+        self._raw_clip_cache[index] = path
+        self._play_raw_shot_clip(path)
+
+    def _play_raw_shot_clip(self, path: Path) -> None:
+        self._shots_playback_active = True
+        self.load_and_play(path, bypass_busy=True)
+
+    def _restore_shots_mode(self) -> None:
+        self._mode = "shots"
+        self.shots_frame.pack(fill="both", expand=True)
+        selection = self.shots_tree.selection()
+        if selection:
+            self._show_shot(int(selection[0]))
         self.status_var.set("Valmis.")
 
     def _on_sync_reconciled(self, exc: Optional[Exception]) -> None:
@@ -855,14 +942,28 @@ class App:
         path = self._selected_path()
         if path is None:
             return
+        # A saved recording, picked from the list - not one of spec
+        # 107's per-shot raw clips, so finishing/leaving it must go
+        # back to the live feed, not the shot list (see
+        # _shots_playback_active, set True only by _play_raw_shot_clip
+        # right before its own load_and_play call).
+        self._shots_playback_active = False
         self.load_and_play(path)
 
-    def load_and_play(self, path: Path) -> None:
+    def load_and_play(self, path: Path, bypass_busy: bool = False) -> None:
+        # bypass_busy (spec 107): a shot's raw clip touches neither the
+        # camera nor the session's own audio capture (that recording's
+        # sd.wait() already completed before its shot list could even
+        # exist - see _finish_immediate_recording's worker) - only the
+        # still-running background ffmpeg encode keeps is_busy True at
+        # that point, which is exactly when a fresh shot list's Play
+        # button is most likely to be clicked. Real saved-recording
+        # playback (on_play_selected) keeps the normal guard.
         logger.info("Loading %s for playback", path.name)
-        if self.session is None or self.session.is_busy:
+        if self.session is None or (self.session.is_busy and not bypass_busy):
             logger.info(
-                "load_and_play: ignored (session=%s busy=%s)",
-                self.session is not None, self.session.is_busy if self.session else None,
+                "load_and_play: ignored (session=%s busy=%s bypass_busy=%s)",
+                self.session is not None, self.session.is_busy if self.session else None, bypass_busy,
             )
             return
         self._exit_shots_mode()
@@ -893,6 +994,7 @@ class App:
         # the record row. before= pins it there regardless of call
         # timing. timeline_frame has nothing packed after it in the
         # center column, so it needs no such pin.
+        self.back_button.config(text="Takaisin laukauksiin" if self._shots_playback_active else "Takaisin livekuvaan")
         self.playback_controls_frame.pack(pady=(0, 4), before=self.status_label)
         self.timeline_frame.pack(fill="x", padx=8, pady=(0, 8))
         self.record_button.config(state="disabled")
@@ -999,9 +1101,16 @@ class App:
 
     def on_back_to_live_click(self) -> None:
         self._close_player()
-        self._mode = "live"
         self.playback_controls_frame.pack_forget()
         self.timeline_frame.pack_forget()
+        if self._shots_playback_active:
+            # Spec 107: this playback session was one of a shot's raw
+            # clips, not a saved recording - return to browsing shots,
+            # not the live feed.
+            self._shots_playback_active = False
+            self._restore_shots_mode()
+            return
+        self._mode = "live"
         if self.session is not None:
             self.record_button.config(state="normal")
         self.status_var.set("Valmis.")
@@ -1123,6 +1232,10 @@ class App:
             self._background_remover.close()
         if self.session is not None:
             self.session.close()
+        # Spec 107: best-effort - these are disposable per-session temp
+        # clips, not worth failing shutdown over.
+        for clip_path in self._raw_clip_cache.values():
+            shutil.rmtree(clip_path.parent, ignore_errors=True)
         self.root.destroy()
 
 
