@@ -1,10 +1,31 @@
 # shot-improvement
 
-Native Python (no browser) that records clips from this laptop's own
-webcam and microphone, saved into `recordings/` (gitignored). Marks
-each visible hand's palm with a green box using on-device MediaPipe
-`PoseLandmarker` — a first step toward recognizing padel-racket and
-hockey-stick motion. See `specs/` for the full history:
+Native Python (no browser) app for reviewing padel/hockey practice
+shots: records clips from this laptop's own webcam and microphone,
+detects each shot from the audio (the stick-to-puck/ball impact),
+measures its speed, and annotates the clip - all on-device, nothing
+sent anywhere until the finished clip is uploaded.
+
+## What it does today
+
+- **Record**: a live annotated camera preview, a record button, a
+  recordings list with play/delete (GUI); or a one-shot CLI. Both save
+  a raw clip and a pose-annotated clip into `recordings/` (gitignored).
+- **Detect each shot from the audio**: finds the loud stick/puck
+  impact sounds, pairs a shot with the moment it hits the far end, and
+  computes the puck's speed from a rink's real 61m length (spec 098).
+- **Annotate**: on-device MediaPipe `PoseLandmarker` draws a yellow
+  box on each visible hand (spec 100/102/103); the annotated clip also
+  gets a spectrogram + a claps/speed band under the video, and a plain
+  snapshot JPEG per detected shot with the speed burned in (spec 099).
+- **Sync to the cloud**: every clip (raw + annotated + a preview image)
+  uploads in the background to two independent backends - GCS and
+  Azure Blob Storage (spec 095) - each backing its own web gallery (see
+  "Two galleries" below).
+
+See "## Architecture" below for the edge/cloud shape of this, and
+`specs/` for the full build history (every increment, in order, with
+the reasoning behind it):
 [080](specs/080-shot-improvement-native-python.md) (CLI),
 [081](specs/081-shot-improvement-native-gui.md) (GUI),
 [082](specs/082-shot-improvement-gui-controls-and-playback.md)
@@ -68,7 +89,11 @@ are rectangle-only now - no "left hand"/"right hand" text), and
 frame-count desync on variable-frame-rate sources like phone screen
 recordings, and added a `--shots-only` mode to
 `tools/annotate_existing_video.py` for this laptop's ~4GB RAM, which
-the full per-frame pass can exceed on a real clip).
+the full per-frame pass can exceed on a real clip), and
+[105](specs/105-shot-improvement-keep-temp-dir.md) (temporarily keeps
+each GUI recording's temp dir - raw/annotated frames + audio.wav -
+on disk instead of deleting it right after processing, path shown in
+the GUI, for manual inspection).
 
 (Two earlier browser-based versions, specs 078 and 079, were built
 first and then replaced entirely — the original laptop this was built
@@ -89,8 +114,11 @@ what that move changed.
 
 ![Architecture diagram](docs/architecture.png)
 
-Placeholder for now (just "TODO") - a real diagram of the laptop app /
-cloud sync / two galleries will replace it. Editable source:
+Shows this as an edge/cloud split: capture (camera + microphone) and
+all processing - raw storage, on-device pose annotation - stay on the
+laptop ("Edge"); only the finished clip crosses to the cloud, where it
+lands in blob storage (dual-written to both GCS and Azure - see "Two
+galleries" below for what reads it there). Editable source:
 [docs/architecture.drawio](docs/architecture.drawio) - open it with
 the [draw.io desktop app](https://github.com/jgraph/drawio-desktop/releases)
 or at [app.diagrams.net](https://app.diagrams.net), edit, save, then
@@ -252,5 +280,13 @@ camera freeze after recording, were both found and fixed - see specs
 selection, the live camera switch, a full record cycle, and full
 playback transport controls (play/pause/stop, frame-step, scrub,
 speed, volume, loop) have all been exercised through real GUI clicks.
-The actual padel/hockey-stick tracking feature this whole app is a
-spike for is still unspecced.
+
+The padel/hockey shot-tracking feature this whole app was originally a
+spike for is no longer unspecced - specs 098-104 built a first real
+version (shot/hit detection from audio, puck speed, per-shot snapshot
+images, hand annotation), validated against both this laptop's own
+webcam recordings and real phone videos of actual practice sessions.
+Genuine stick/puck visual tracking (as opposed to audio-timed events)
+was explored (specs 100/101) and then deliberately dropped back to
+hands-only per direct feedback - worth revisiting later if that's
+wanted again, not because it didn't work.

@@ -59,6 +59,16 @@ CONSECUTIVE_FAILURE_ERROR_AT = 200
 # costs on this hardware is worth knowing about (a real stutter, not
 # just "inference is slow").
 SLOW_FRAME_WARN_THRESHOLD_S = 1.0
+# Spec 105: temporarily True, per explicit user request - normally the
+# temp dir holding a recording's raw/annotated frames + audio.wav is
+# deleted the instant processing finishes (see _finish_immediate_
+# recording's worker(), below); while this is True, it's left on disk
+# instead (path exposed via RecordingResult.tmp_dir_path, shown in the
+# GUI) so it can be inspected by hand. A later prompt restores
+# automatic cleanup - flip this back to False then (and revert
+# start_recording's mkdtemp() branch back to plain TemporaryDirectory()
+# if the manual-inspection path is no longer wanted at all).
+KEEP_TEMP_DIR_FOR_INSPECTION = True
 
 
 @dataclass
@@ -67,6 +77,11 @@ class RecordingResult:
     annotated_path: Path
     frame_count: int
     actual_fps: float
+    # Spec 105: the recording's temp dir, only non-None while
+    # KEEP_TEMP_DIR_FOR_INSPECTION is True (it's deleted before this
+    # result is even constructed otherwise, so there'd be nothing to
+    # point at).
+    tmp_dir_path: Optional[Path] = None
 
 
 class LiveSession:
@@ -92,6 +107,7 @@ class LiveSession:
         # frames were captured at even intervals.
         self._frame_times: list[float] = []
         self._tmp_dir: Optional[tempfile.TemporaryDirectory] = None
+        self._tmp_dir_path: Optional[Path] = None
         self._raw_dir: Optional[Path] = None
         self._annotated_dir: Optional[Path] = None
         self._out_dir: Optional[Path] = None
@@ -294,12 +310,23 @@ class LiveSession:
             self._raw_dir.mkdir(parents=True)
             self._annotated_dir = None
             self._tmp_dir = None
+            self._tmp_dir_path = None
             self._pending_capture_dir = capture_dir
             self._profiler.set_temp_dir(capture_dir)
         else:
             out_dir.mkdir(parents=True, exist_ok=True)
-            self._tmp_dir = tempfile.TemporaryDirectory()
-            tmp_path = Path(self._tmp_dir.name)
+            if KEEP_TEMP_DIR_FOR_INSPECTION:
+                # mkdtemp() (unlike TemporaryDirectory()) has no
+                # finalizer that deletes the directory on garbage
+                # collection - it simply stays on disk until something
+                # removes it explicitly, which nothing here does while
+                # this flag is on.
+                self._tmp_dir = None
+                tmp_path = Path(tempfile.mkdtemp(prefix="shot-improvement-"))
+            else:
+                self._tmp_dir = tempfile.TemporaryDirectory()
+                tmp_path = Path(self._tmp_dir.name)
+            self._tmp_dir_path = tmp_path
             self._raw_dir = tmp_path / "raw"
             self._annotated_dir = tmp_path / "annotated"
             self._raw_dir.mkdir()
@@ -430,6 +457,7 @@ class LiveSession:
         background thread. See _finish_deferred_recording for the
         "Vain nauhoitus" (spec 093) alternative."""
         tmp_dir = self._tmp_dir
+        tmp_dir_path = self._tmp_dir_path
         raw_dir, annotated_dir, out_dir = self._raw_dir, self._annotated_dir, self._out_dir
         on_done = self._on_recording_done
         on_raw_ready = self._on_raw_ready
@@ -454,7 +482,7 @@ class LiveSession:
                     logger.warning("finish_recording: zero frames captured")
                 else:
                     with profiler.stage("audio:write"):
-                        audio_tmp = Path(tmp_dir.name) / "audio.wav"
+                        audio_tmp = tmp_dir_path / "audio.wav"
                         sf.write(audio_tmp, audio_buffer, SAMPLE_RATE)
                     actual_fps = frame_count / elapsed_s if elapsed_s > 0 else 1.0
                     profiler.note("frame_count", frame_count)
@@ -510,7 +538,13 @@ class LiveSession:
                         on_progress=report("Tallennetaan levylle"),
                         profiler=profiler,
                     )
-                    result = RecordingResult(raw_out, annotated_out, frame_count, actual_fps)
+                    result = RecordingResult(
+                        raw_out, annotated_out, frame_count, actual_fps,
+                        # Only advertise the path when it's actually
+                        # going to survive past this call - see
+                        # KEEP_TEMP_DIR_FOR_INSPECTION's docstring.
+                        tmp_dir_path=tmp_dir_path if KEEP_TEMP_DIR_FOR_INSPECTION else None,
+                    )
                     logger.info("finish_recording: done -> %s / %s", raw_out.name, annotated_out.name)
             except Exception:
                 # Never let this propagate uncaught - it's running on a
@@ -521,7 +555,8 @@ class LiveSession:
                 result = None
             finally:
                 profiler.report("gui-record")
-                tmp_dir.cleanup()
+                if tmp_dir is not None:
+                    tmp_dir.cleanup()
                 self._encoding_count -= 1
                 if on_done:
                     dispatch(lambda: on_done(result))

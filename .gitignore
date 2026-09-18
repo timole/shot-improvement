@@ -9,3 +9,5 @@ logs/
 cloud_sync_tombstones.json
 .pytest_cache/
 docs/.$*.bkp
+docs/.$*.dtmp
+.claude/scheduled_tasks.lock

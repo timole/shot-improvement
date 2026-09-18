@@ -140,6 +140,17 @@ class App:
         self.status_label = ttk.Label(self.left_frame, textvariable=self.status_var)
         self.status_label.pack(pady=(0, 8))
 
+        # Spec 105: shows the most recent recording's temp folder
+        # (raw/annotated frames + audio.wav, spec 105 temporarily kept
+        # on disk instead of auto-deleted - see core.session.
+        # KEEP_TEMP_DIR_FOR_INSPECTION) - empty/hidden whenever that
+        # flag is off, or before any recording has finished yet.
+        self.tmp_dir_var = tk.StringVar(value="")
+        self.tmp_dir_label = ttk.Label(
+            self.left_frame, textvariable=self.tmp_dir_var, foreground="#555", wraplength=280, justify="left",
+        )
+        self.tmp_dir_label.pack(pady=(0, 8))
+
         self._build_list(self.left_frame)
         self._apply_layout()
 
@@ -602,6 +613,7 @@ class App:
         # (it doesn't touch the camera).
         saved_msg = f"Tallennettu ({result.frame_count} kuvaa, {result.actual_fps:.1f} fps)."
         self._set_status_if_idle(f"{saved_msg} Synkronoidaan verkkoon…")
+        self.tmp_dir_var.set(f"Väliaikaiskansio: {result.tmp_dir_path}" if result.tmp_dir_path else "")
         self.refresh_recordings()
 
         def make_on_progress(label: str) -> Callable[[int, int], None]:
