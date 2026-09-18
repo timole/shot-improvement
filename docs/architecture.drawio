@@ -58,7 +58,7 @@
 
         <!-- Blob storage (unchanged size) -->
         <mxCell id="_fYH4QLw_KVy8iFZfCRF-5" parent="1" style="image;aspect=fixed;html=1;points=[];align=center;fontSize=12;image=img/lib/azure2/general/Blob_Block.svg;" value="Blob storage" vertex="1">
-          <mxGeometry height="52" width="65" x="570" y="180" as="geometry" />
+          <mxGeometry height="52" width="65" x="570" y="120" as="geometry" />
         </mxCell>
 
         <!-- Flow, left to right: capture -> raw data -> pose annotation -> cloud -->
