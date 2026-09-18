@@ -17,15 +17,14 @@ from core.compose import (
     CLAPS_BAND_BG_BGR,
     PAIR_LINE_COLOR_BGR,
     PAIR_LINE_Y,
-    SHOT_CLIP_PREROLL_S,
     SHOT_IMAGE_LABEL_COLOR_BGR,
     SHOT_SPECTROGRAM_HEIGHT,
     _x_for_time,
-    build_shot_clip,
     composite_into,
     draw_pair_annotations,
     render_claps_band,
     save_shot_images,
+    select_shot_frame_range,
 )
 from core.pose import PalmBox, draw_palm_boxes
 from core.spectrogram import with_playhead
@@ -343,90 +342,40 @@ def test_save_shot_images_returns_empty_list_when_no_claps(tmp_path) -> None:
     assert list(out_dir.glob("*.jpg")) == []
 
 
-def _write_wav(path, duration_s, sample_rate=44100) -> None:
-    import soundfile as sf
+def test_select_shot_frame_range_paired_shot_spans_preroll_to_hit() -> None:
+    frame_times = [i * 0.2 for i in range(31)]  # 0.0 .. 6.0s, 0.2s apart
 
-    audio = np.zeros(int(duration_s * sample_rate), dtype=np.int16)
-    sf.write(str(path), audio, sample_rate)
+    start_idx, end_idx = select_shot_frame_range(frame_times, shot_t=3.0, hit_t=4.0)
 
-
-def test_build_shot_clip_spans_roughly_the_preroll_to_hit_window(tmp_path) -> None:
-    import cv2
-
-    raw_dir = tmp_path / "raw"
-    raw_dir.mkdir()
-    frame_count, duration_s = 30, 6.0
-    _write_indexed_frames(raw_dir, frame_count)
-    frame_times = [i * duration_s / (frame_count - 1) for i in range(frame_count)]
-    audio_path = tmp_path / "audio.wav"
-    _write_wav(audio_path, duration_s)
-    out_path = tmp_path / "clip.mp4"
-
-    shot_t, hit_t = 3.0, 4.0
-    ok = build_shot_clip(raw_dir, "bmp", frame_times, audio_path, actual_fps=5.0, shot_t=shot_t, hit_t=hit_t, out_path=out_path)
-
-    assert ok is True
-    assert out_path.exists()
-    cap = cv2.VideoCapture(str(out_path))
-    try:
-        fps = cap.get(cv2.CAP_PROP_FPS)
-        total_frames = cap.get(cv2.CAP_PROP_FRAME_COUNT)
-        clip_duration_s = total_frames / fps if fps > 0 else 0.0
-    finally:
-        cap.release()
-    expected = hit_t - (shot_t - SHOT_CLIP_PREROLL_S)
-    assert clip_duration_s == pytest.approx(expected, abs=0.5)
+    assert frame_times[start_idx] == pytest.approx(1.0)  # 3.0 - SHOT_PREROLL_S (2.0)
+    assert frame_times[end_idx] == pytest.approx(4.0)
 
 
-def test_build_shot_clip_unpaired_shot_plays_to_recording_end(tmp_path) -> None:
-    import cv2
+def test_select_shot_frame_range_unpaired_shot_goes_to_last_frame() -> None:
+    frame_times = [i * 0.2 for i in range(31)]  # 0.0 .. 6.0s
 
-    raw_dir = tmp_path / "raw"
-    raw_dir.mkdir()
-    frame_count, duration_s = 30, 6.0
-    _write_indexed_frames(raw_dir, frame_count)
-    frame_times = [i * duration_s / (frame_count - 1) for i in range(frame_count)]
-    audio_path = tmp_path / "audio.wav"
-    _write_wav(audio_path, duration_s)
-    out_path = tmp_path / "clip.mp4"
+    start_idx, end_idx = select_shot_frame_range(frame_times, shot_t=5.0, hit_t=None)
 
-    shot_t = 5.0
-    ok = build_shot_clip(raw_dir, "bmp", frame_times, audio_path, actual_fps=5.0, shot_t=shot_t, hit_t=None, out_path=out_path)
-
-    assert ok is True
-    cap = cv2.VideoCapture(str(out_path))
-    try:
-        fps = cap.get(cv2.CAP_PROP_FPS)
-        total_frames = cap.get(cv2.CAP_PROP_FRAME_COUNT)
-        clip_duration_s = total_frames / fps if fps > 0 else 0.0
-    finally:
-        cap.release()
-    expected = frame_times[-1] - (shot_t - SHOT_CLIP_PREROLL_S)
-    assert clip_duration_s == pytest.approx(expected, abs=0.5)
+    assert frame_times[start_idx] == pytest.approx(3.0)  # 5.0 - 2.0
+    assert end_idx == len(frame_times) - 1
 
 
-def test_build_shot_clip_returns_false_when_raw_dir_missing(tmp_path) -> None:
-    raw_dir = tmp_path / "raw"  # never created
-    audio_path = tmp_path / "audio.wav"
-    _write_wav(audio_path, 6.0)
-    out_path = tmp_path / "clip.mp4"
-    frame_times = [i * 6.0 / 29 for i in range(30)]
+def test_select_shot_frame_range_clamps_preroll_to_recording_start() -> None:
+    frame_times = [i * 0.2 for i in range(11)]  # 0.0 .. 2.0s
 
-    ok = build_shot_clip(raw_dir, "bmp", frame_times, audio_path, actual_fps=5.0, shot_t=3.0, hit_t=4.0, out_path=out_path)
+    start_idx, end_idx = select_shot_frame_range(frame_times, shot_t=0.5, hit_t=1.0)
 
-    assert ok is False
-    assert not out_path.exists()
+    assert start_idx == 0  # shot_t - SHOT_PREROLL_S would be negative
+    assert frame_times[end_idx] == pytest.approx(1.0)
 
 
-def test_build_shot_clip_returns_false_on_frame_count_mismatch(tmp_path) -> None:
-    raw_dir = tmp_path / "raw"
-    raw_dir.mkdir()
-    _write_indexed_frames(raw_dir, 10)  # fewer files than frame_times below expects
-    audio_path = tmp_path / "audio.wav"
-    _write_wav(audio_path, 6.0)
-    out_path = tmp_path / "clip.mp4"
-    frame_times = [i * 6.0 / 29 for i in range(30)]
+def test_select_shot_frame_range_returns_sentinel_when_out_of_range() -> None:
+    frame_times = [0.0, 0.1, 0.2]  # a 0.2s recording
 
-    ok = build_shot_clip(raw_dir, "bmp", frame_times, audio_path, actual_fps=5.0, shot_t=3.0, hit_t=4.0, out_path=out_path)
+    start_idx, end_idx = select_shot_frame_range(frame_times, shot_t=100.0, hit_t=101.0)
 
-    assert ok is False
+    assert (start_idx, end_idx) == (-1, -1)
+
+
+def test_select_shot_frame_range_returns_sentinel_for_empty_frame_times() -> None:
+    assert select_shot_frame_range([], shot_t=3.0, hit_t=4.0) == (-1, -1)

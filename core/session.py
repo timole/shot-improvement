@@ -86,15 +86,13 @@ class RecordingResult:
 
 @dataclass
 class ShotSource:
-    """Spec 107: enough to lazily build a raw playback clip for any shot
-    from on_shots_ready's own list, later - dispatched alongside it so
-    the GUI never has to guess where a recording's raw frames/audio
-    live in either mode (a normal recording's temp dir vs a deferred
+    """Spec 107/108: enough to play any shot's raw frames directly
+    later, from on_shots_ready's own list - dispatched alongside it so
+    the GUI never has to guess where a recording's raw frames live in
+    either mode (a normal recording's temp dir vs a deferred
     recording's pending/<ts> entry)."""
     raw_dir: Path
-    audio_path: Path
     frame_times: list[float]
-    actual_fps: float
 
 
 class LiveSession:
@@ -266,10 +264,10 @@ class LiveSession:
         the much slower raw/annotated encodes even start), and, in
         defer_processing mode, shortly after on_deferred_saved with no
         mp4 involved at all. Empty list means no shots were detected.
-        source (spec 107) is a ShotSource pointing at this recording's
-        raw frames/audio, for lazily building a per-shot raw playback
-        clip later (core.compose.build_shot_clip) - present even when
-        shots is empty.
+        source (spec 107/108) is a ShotSource pointing at this
+        recording's raw frames, for playing a per-shot raw preview
+        later (core.compose.select_shot_frame_range) - present even
+        when shots is empty.
 
         defer_processing (spec 093): when True, this recording's frames
         are captured exactly as normal, but NO processing (pose
@@ -535,7 +533,7 @@ class LiveSession:
                             raw_dir, FRAME_FILE_EXTENSION, frame_times, audio_buffer, SAMPLE_RATE,
                             out_dir, f"shot-improvement-{timestamp}",
                         )
-                    source = ShotSource(raw_dir, audio_tmp, frame_times, actual_fps)
+                    source = ShotSource(raw_dir, frame_times)
                     dispatch(lambda: on_shots_ready(shots, source))
 
                     # Spec 091: the raw clip needs no pose annotation at
@@ -660,7 +658,7 @@ class LiveSession:
                             raw_dir, FRAME_FILE_EXTENSION, frame_times, audio_buffer, SAMPLE_RATE,
                             out_dir, f"shot-improvement-{timestamp}",
                         )
-                        source = ShotSource(raw_dir, pending_dir / "audio.wav", frame_times, actual_fps)
+                        source = ShotSource(raw_dir, frame_times)
                         dispatch(lambda: on_shots_ready(shots, source))
                     except Exception:
                         # The recording itself is already safely persisted
