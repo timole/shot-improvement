@@ -46,9 +46,9 @@
           <mxGeometry x="160" y="120" width="110" height="60" as="geometry" />
         </mxCell>
 
-        <!-- Pose annotation (on-device) -->
+        <!-- Pose annotation (on-device) - same row as Raw data, to its right -->
         <mxCell id="pose-annotation" value="Pose annotation&#10;(on-device,&#10;MediaPipe)" style="rounded=1;arcSize=10;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;strokeWidth=2;fontSize=11;align=center;verticalAlign=middle;" vertex="1" parent="1">
-          <mxGeometry x="160" y="210" width="110" height="60" as="geometry" />
+          <mxGeometry x="290" y="120" width="110" height="60" as="geometry" />
         </mxCell>
 
         <!-- Cloud group (blob storage) -->
@@ -68,7 +68,7 @@
         <mxCell id="arrow-mic" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;elbow=vertical;startArrow=none;strokeColor=#333333;strokeWidth=2;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.7;entryDx=0;entryDy=0;" edge="1" parent="1" source="mic-head" target="raw-data">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="arrow-raw-to-pose" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;elbow=vertical;startArrow=none;strokeColor=#333333;strokeWidth=2;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="raw-data" target="pose-annotation">
+        <mxCell id="arrow-raw-to-pose" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;elbow=vertical;startArrow=none;strokeColor=#333333;strokeWidth=2;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="raw-data" target="pose-annotation">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
         <mxCell id="arrow-pose-to-cloud" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;elbow=vertical;startArrow=none;strokeColor=#333333;strokeWidth=2;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="pose-annotation" target="_fYH4QLw_KVy8iFZfCRF-5">
