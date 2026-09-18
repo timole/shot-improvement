@@ -113,6 +113,30 @@ MANUAL_EXPOSURE_MODE_DSHOW = 0.25
 # doesn't reach 60fps with this set (see camera_info() / the "Opened
 # camera" log line for the real negotiated exposure).
 FIXED_EXPOSURE_DSHOW = -7
+# Spec 112: fixing exposure alone (spec 109) wasn't enough - real
+# recordings still measured ~30-34fps, well under the negotiated 60.
+# Autofocus was the next suspect (it re-drives the lens - a real,
+# non-instant mechanical/optical adjustment - whenever the C922
+# decides the scene changed, competing with frame delivery) and is
+# fixed here too, at 0 - read back directly from this camera
+# (cap.get(CAP_PROP_FOCUS)) after its own autofocus had already
+# settled on a normal indoor scene, not guessed - which for this
+# driver's convention is the far/infinity end, the right focus for a
+# rink shot from well past any close range.
+#
+# Measured, not fixed by this alone: with BOTH exposure and focus
+# manual, real throughput still lands at a clean, exact 30.0fps -
+# confirmed independent of resolution (640x360 measured the same exact
+# 30.0fps as 1280x720) and independent of every other cv2.CAP_DSHOW
+# property tried. This looks like a genuine ceiling of this camera's
+# MJPG mode over DirectShow on this system, not something further
+# property tuning fixes - cv2.CAP_MSMF (the newer Windows media
+# backend) was tried once as an alternative and hung the whole process
+# outright (had to be killed), so it's not a safe avenue either.
+# Exposure/focus are kept manual regardless - they're real, validated
+# wins for consistency even without unlocking 60fps outright.
+MANUAL_FOCUS_MODE = 0  # 0 = off (matches CAP_PROP_AUTOFOCUS's usual convention)
+FIXED_FOCUS = 0
 # Intermediate per-frame files (deleted once ffmpeg encodes the real
 # output) are BMP, not PNG: measured on this hardware, PNG compression
 # cost ~26ms/frame (two files per captured frame = ~53ms/frame) versus
@@ -219,6 +243,8 @@ def open_camera(index: int) -> cv2.VideoCapture:
     # capture mode settles has been unreliable on this hardware).
     cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, MANUAL_EXPOSURE_MODE_DSHOW)
     cap.set(cv2.CAP_PROP_EXPOSURE, FIXED_EXPOSURE_DSHOW)
+    cap.set(cv2.CAP_PROP_AUTOFOCUS, MANUAL_FOCUS_MODE)
+    cap.set(cv2.CAP_PROP_FOCUS, FIXED_FOCUS)
     if cap.isOpened():
         cap.read()
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -227,11 +253,12 @@ def open_camera(index: int) -> cv2.VideoCapture:
         fourcc = int(cap.get(cv2.CAP_PROP_FOURCC))
         fourcc_str = "".join(chr((fourcc >> (8 * i)) & 0xFF) for i in range(4))
         exposure = cap.get(cv2.CAP_PROP_EXPOSURE)
+        focus = cap.get(cv2.CAP_PROP_FOCUS)
         logger.info(
-            "Opened camera %d: negotiated %dx%d @ %.1f fps, fourcc=%r, exposure=%.1f "
-            "(requested ceiling %.0f, fourcc %r, exposure %.1f)",
-            index, width, height, fps, fourcc_str, exposure,
-            REQUESTED_FPS_CEILING, REQUESTED_FOURCC, FIXED_EXPOSURE_DSHOW,
+            "Opened camera %d: negotiated %dx%d @ %.1f fps, fourcc=%r, exposure=%.1f, focus=%.1f "
+            "(requested ceiling %.0f, fourcc %r, exposure %.1f, focus %.1f)",
+            index, width, height, fps, fourcc_str, exposure, focus,
+            REQUESTED_FPS_CEILING, REQUESTED_FOURCC, FIXED_EXPOSURE_DSHOW, FIXED_FOCUS,
         )
     else:
         logger.warning("Failed to open camera %d", index)

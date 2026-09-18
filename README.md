@@ -123,7 +123,14 @@ spec 098's "cluster a contiguous loud span into one event", and
 pairing now matches a shot to a hit only within a physically plausible
 puck-travel window instead of blindly pairing every two consecutive
 claps; both fixes were found and validated against real Audacity-
-marked ground truth).
+marked ground truth), and
+[112](specs/112-shot-improvement-manual-focus-fps-ceiling.md) (fixes
+autofocus too, alongside spec 109's manual exposure - a real
+improvement, but real capture throughput still lands at a clean, exact
+30.0fps regardless of resolution or any other camera property tried;
+documented as a likely genuine ceiling of this camera's MJPG mode over
+DirectShow on this system, not something further property tuning
+fixes).
 
 (Two earlier browser-based versions, specs 078 and 079, were built
 first and then replaced entirely — the original laptop this was built
