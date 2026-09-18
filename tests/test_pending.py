@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from core.pending import PendingRecording, delete_pending, list_pending, write_meta
+from core.pending import PendingRecording, archive_processed, delete_pending, list_pending, write_meta
 
 
 def _make_capture_dir(pending_dir: Path, timestamp: str) -> Path:
@@ -126,6 +126,34 @@ def test_delete_pending_removes_the_directory_tree(tmp_path: Path) -> None:
 
 def test_delete_pending_on_missing_directory_does_not_raise(tmp_path: Path) -> None:
     delete_pending(tmp_path / "never-existed")  # must not raise
+
+
+def test_archive_processed_keeps_files_and_moves_them_out(tmp_path: Path) -> None:
+    pending_dir = tmp_path / "pending"
+    processed_dir = tmp_path / "pending" / "processed"
+    capture_dir = _make_capture_dir(pending_dir, "20260101120000")
+    write_meta(capture_dir, frame_count=1, actual_fps=1.0, duration_s=1.0, video_name="cam", audio_name=None)
+    (capture_dir / "raw" / "frame_000000.bmp").write_bytes(b"fake-frame")
+
+    dest = archive_processed(capture_dir, processed_dir)
+
+    assert dest == processed_dir / "20260101120000"
+    assert not capture_dir.exists()
+    assert (dest / "meta.json").exists()
+    assert (dest / "raw" / "frame_000000.bmp").read_bytes() == b"fake-frame"
+
+
+def test_list_pending_skips_the_processed_directory(tmp_path: Path) -> None:
+    pending_dir = tmp_path / "pending"
+    still_pending = _make_capture_dir(pending_dir, "20260101120000")
+    write_meta(still_pending, frame_count=1, actual_fps=1.0, duration_s=1.0, video_name="cam", audio_name=None)
+    archived = _make_capture_dir(pending_dir, "20260101110000")
+    write_meta(archived, frame_count=1, actual_fps=1.0, duration_s=1.0, video_name="cam", audio_name=None)
+    archive_processed(archived, pending_dir / "processed")
+
+    items = list_pending(pending_dir)
+
+    assert [item.timestamp for item in items] == ["20260101120000"]
 
 
 def test_created_label_formats_iso_timestamp() -> None:

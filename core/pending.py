@@ -21,7 +21,14 @@ moment processing finishes, a deferred recording's frames are written
 straight into PENDING_DIR/<timestamp>/ so they survive past the
 recording call itself - across GUI restarts, even - until
 process_pending_recording() turns them into the usual raw + annotated
-mp4s and deletes the source directory.
+mp4s.
+
+Spec 110: a processed entry's raw frames/audio are kept, not deleted -
+moved to PROCESSED_DIR (PENDING_DIR/processed/<timestamp>/) so
+list_pending() stops seeing it as still-pending, without losing the
+files. Explicit, durable user request - "keep all files, do not delete
+them" - not a temporary flag like spec 105's KEEP_TEMP_DIR_FOR_
+INSPECTION.
 """
 
 from __future__ import annotations
@@ -44,6 +51,9 @@ logger = get_logger("pending")
 
 PENDING_DIR = Path(__file__).resolve().parent.parent / "pending"
 META_FILENAME = "meta.json"
+# Spec 110: where a processed entry's raw frames/audio move to, instead
+# of being deleted - see archive_processed().
+PROCESSED_DIR = PENDING_DIR / "processed"
 
 
 @dataclass(frozen=True)
@@ -113,7 +123,7 @@ def list_pending(pending_dir: Path = PENDING_DIR) -> list[PendingRecording]:
         return []
     items: list[PendingRecording] = []
     for entry in sorted(pending_dir.iterdir()):
-        if not entry.is_dir():
+        if not entry.is_dir() or entry.name == PROCESSED_DIR.name:
             continue
         meta_path = entry / META_FILENAME
         if not meta_path.exists():
@@ -141,6 +151,20 @@ def delete_pending(dir_path: Path) -> None:
     shutil.rmtree(dir_path, ignore_errors=True)
 
 
+def archive_processed(dir_path: Path, processed_dir: Path = PROCESSED_DIR) -> Path:
+    """Moves a successfully-processed entry out of pending_dir into
+    processed_dir (spec 110) - keeps every file (raw frames, audio.wav,
+    meta.json) instead of deleting them, while getting it out of
+    list_pending()'s view so it doesn't linger in the "Odottaa
+    käsittelyä" queue forever. processed_dir is overridable (like
+    list_pending's pending_dir) so tests don't touch the real
+    PROCESSED_DIR."""
+    processed_dir.mkdir(parents=True, exist_ok=True)
+    dest = processed_dir / dir_path.name
+    shutil.move(str(dir_path), str(dest))
+    return dest
+
+
 def process_pending_recording(
     item: PendingRecording,
     out_dir: Path,
@@ -162,11 +186,11 @@ def process_pending_recording(
     PENDING_DIR/write_meta); the real type is imported locally, inside
     worker(), once it's actually needed.
 
-    Deletes `item.dir_path` once both mp4s are written; leaves it in
-    place untouched if anything fails, so a transient error (camera
-    unrelated at this point - no camera access happens here at all)
-    never loses footage, and the item stays in the pending queue ready
-    to retry.
+    Archives `item.dir_path` (spec 110 - moved to PROCESSED_DIR, not
+    deleted) once both mp4s are written; leaves it in place untouched
+    if anything fails, so a transient error (camera unrelated at this
+    point - no camera access happens here at all) never loses footage,
+    and the item stays in the pending queue ready to retry.
 
     Runs on its own background thread at lowered OS priority (spec
     091's pattern, reused here) - a new recording must never be slowed
@@ -228,8 +252,11 @@ def process_pending_recording(
                     profiler=profiler,
                 )
             result = RecordingResult(raw_out, annotated_out, item.frame_count, item.actual_fps)
-            delete_pending(item.dir_path)
-            logger.info("process_pending_recording: done -> %s / %s (source deleted)", raw_out.name, annotated_out.name)
+            archived_to = archive_processed(item.dir_path)
+            logger.info(
+                "process_pending_recording: done -> %s / %s (source kept, archived to %s)",
+                raw_out.name, annotated_out.name, archived_to,
+            )
         except Exception:
             logger.exception("process_pending_recording: failed for %s (kept for retry)", item.dir_path)
             result = None
