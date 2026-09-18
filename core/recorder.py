@@ -94,6 +94,25 @@ REQUESTED_FPS_CEILING = 60.0
 # same as OBS) fixes this, but only when set AFTER width/height/fps -
 # see open_camera().
 REQUESTED_FOURCC = "MJPG"
+# Spec 109: the C922's own auto-exposure was observed lengthening its
+# per-frame exposure time under normal indoor lighting, which caps the
+# real deliverable frame rate well below the negotiated 60fps/MJPG
+# capability - measured on a real session: throughput dropped from
+# ~32fps to ~10-14fps mid-session with no camera reopen in between (so
+# not a negotiation/bandwidth issue - see REQUESTED_FOURCC above,
+# already fixed in spec 088), and stayed there. Forcing a short, fixed
+# exposure keeps the frame rate up regardless of ambient light, at the
+# cost of a darker/possibly-blurrier image - an accepted tradeoff here,
+# since this app's whole point is measuring fast motion, not a good
+# picture. DirectShow's CAP_PROP_AUTO_EXPOSURE convention (not the
+# more common V4L2 one): 0.25 = manual, 0.75 = auto.
+MANUAL_EXPOSURE_MODE_DSHOW = 0.25
+# DirectShow exposure is log2-scale seconds (value v -> 2**v seconds) -
+# -7 is ~1/128s (~7.8ms), comfortably under the ~16.7ms one frame gets
+# at 60fps. Camera/driver-specific; revisit if a real recording still
+# doesn't reach 60fps with this set (see camera_info() / the "Opened
+# camera" log line for the real negotiated exposure).
+FIXED_EXPOSURE_DSHOW = -7
 # Intermediate per-frame files (deleted once ffmpeg encodes the real
 # output) are BMP, not PNG: measured on this hardware, PNG compression
 # cost ~26ms/frame (two files per captured frame = ~53ms/frame) versus
@@ -194,6 +213,12 @@ def open_camera(index: int) -> cv2.VideoCapture:
     # around 10; setting it last actually negotiates MJPG and gets ~58
     # real fps at 1280x720.
     cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*REQUESTED_FOURCC))
+    # Spec 109: forces a short, fixed exposure - see MANUAL_EXPOSURE_
+    # MODE_DSHOW/FIXED_EXPOSURE_DSHOW's own docstrings for why. Applied
+    # last, same reasoning as FOURCC above (a property set before the
+    # capture mode settles has been unreliable on this hardware).
+    cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, MANUAL_EXPOSURE_MODE_DSHOW)
+    cap.set(cv2.CAP_PROP_EXPOSURE, FIXED_EXPOSURE_DSHOW)
     if cap.isOpened():
         cap.read()
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -201,9 +226,12 @@ def open_camera(index: int) -> cv2.VideoCapture:
         fps = cap.get(cv2.CAP_PROP_FPS)
         fourcc = int(cap.get(cv2.CAP_PROP_FOURCC))
         fourcc_str = "".join(chr((fourcc >> (8 * i)) & 0xFF) for i in range(4))
+        exposure = cap.get(cv2.CAP_PROP_EXPOSURE)
         logger.info(
-            "Opened camera %d: negotiated %dx%d @ %.1f fps, fourcc=%r (requested ceiling %.0f, fourcc %r)",
-            index, width, height, fps, fourcc_str, REQUESTED_FPS_CEILING, REQUESTED_FOURCC,
+            "Opened camera %d: negotiated %dx%d @ %.1f fps, fourcc=%r, exposure=%.1f "
+            "(requested ceiling %.0f, fourcc %r, exposure %.1f)",
+            index, width, height, fps, fourcc_str, exposure,
+            REQUESTED_FPS_CEILING, REQUESTED_FOURCC, FIXED_EXPOSURE_DSHOW,
         )
     else:
         logger.warning("Failed to open camera %d", index)

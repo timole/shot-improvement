@@ -107,7 +107,12 @@ and cached per shot; finishing it returns to the shot list), and
 [108](specs/108-shot-improvement-raw-shot-frame-playback.md)
 (replaced spec 107's ffmpeg-encoded clip with direct playback of the
 shot's own raw BMP frames - no encoding, no audio, no temp file - with
-a 0.25x/0.5x/1.0x/2.0x speed picker).
+a 0.25x/0.5x/1.0x/2.0x speed picker), and
+[109](specs/109-shot-improvement-force-manual-exposure.md) (forces a
+short, fixed camera exposure - auto-exposure was found lengthening
+per-frame exposure time under normal room lighting, capping real
+captured fps around 10-14 instead of the negotiated 60; a
+darker/blurrier picture is an accepted tradeoff for keeping fps up).
 
 (Two earlier browser-based versions, specs 078 and 079, were built
 first and then replaced entirely — the original laptop this was built
