@@ -1,6 +1,6 @@
 <mxfile host="Electron" agent="shot-improvement">
   <diagram name="Architecture" id="shot-improvement-architecture">
-    <mxGraphModel dx="848" dy="446" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="850" pageHeight="500" math="0" shadow="0">
+    <mxGraphModel dx="1484" dy="780" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="850" pageHeight="500" math="0" shadow="0">
       <root>
         <mxCell id="0" />
         <mxCell id="1" parent="0" />
@@ -35,7 +35,7 @@
           <mxGeometry height="16" width="80" x="46.5" y="244" as="geometry" />
         </mxCell>
         <mxCell id="raw-data" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d6b656;strokeWidth=2;fontSize=11;fontFamily=Arial;align=center;verticalAlign=middle;" value="Raw data&#xa;(video + audio,&#xa;local disk)" vertex="1">
-          <mxGeometry height="140" width="110" x="160" y="120" as="geometry" />
+          <mxGeometry height="140" width="80" x="160" y="120" as="geometry" />
         </mxCell>
         <mxCell id="pose-annotation" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#9673a6;strokeWidth=2;fontSize=11;fontFamily=Arial;align=center;verticalAlign=middle;" value="Pose annotation&#xa;(on-device,&#xa;MediaPipe)" vertex="1">
           <mxGeometry height="60" width="110" x="290" y="120" as="geometry" />
@@ -52,26 +52,23 @@
         <mxCell id="azure-logo" parent="1" style="image;aspect=fixed;html=1;points=[];image=img/lib/azure2/other/Azure_A.svg;" value="" vertex="1">
           <mxGeometry height="28" width="28" x="492" y="72" as="geometry" />
         </mxCell>
-        <mxCell id="arrow-camera" edge="1" parent="1" source="camera-body" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;elbow=vertical;startArrow=none;strokeColor=#000000;strokeWidth=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=-0.005;entryY=0.227;entryDx=0;entryDy=0;entryPerimeter=0;" target="raw-data">
+        <mxCell id="arrow-camera" edge="1" parent="1" source="camera-body" target="raw-data" style="rounded=0;html=1;endArrow=block;startArrow=none;strokeColor=#000000;strokeWidth=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="arrow-mic" edge="1" parent="1" source="mic-head" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;elbow=vertical;startArrow=none;strokeColor=#000000;strokeWidth=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=-0.003;entryY=0.692;entryDx=0;entryDy=0;entryPerimeter=0;" target="raw-data">
+        <mxCell id="arrow-mic" edge="1" parent="1" source="mic-head" target="raw-data" style="rounded=0;html=1;endArrow=block;startArrow=none;strokeColor=#000000;strokeWidth=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="arrow-raw-to-pose" edge="1" parent="1" source="raw-data" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;elbow=vertical;startArrow=none;strokeColor=#000000;strokeWidth=1;exitX=1;exitY=0.2143;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" target="pose-annotation">
+        <mxCell id="arrow-raw-to-pose" edge="1" parent="1" source="raw-data" target="pose-annotation" style="rounded=0;html=1;endArrow=block;startArrow=none;strokeColor=#000000;strokeWidth=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="arrow-pose-to-cloud" edge="1" parent="1" source="pose-annotation" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;elbow=vertical;startArrow=none;strokeColor=#000000;strokeWidth=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.3;entryDx=0;entryDy=0;" target="_fYH4QLw_KVy8iFZfCRF-5">
+        <mxCell id="arrow-raw-to-speed" edge="1" parent="1" source="raw-data" target="speed-recognition" style="rounded=0;html=1;endArrow=block;startArrow=none;strokeColor=#000000;strokeWidth=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="arrow-speed-to-cloud" edge="1" parent="1" source="speed-recognition" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;elbow=vertical;startArrow=none;strokeColor=#000000;strokeWidth=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.7;entryDx=0;entryDy=0;" target="_fYH4QLw_KVy8iFZfCRF-5">
+        <mxCell id="arrow-pose-to-cloud" edge="1" parent="1" source="pose-annotation" target="_fYH4QLw_KVy8iFZfCRF-5" style="rounded=0;html=1;endArrow=block;startArrow=none;strokeColor=#000000;strokeWidth=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="1azYyrGc3ZP5ukuMEKm7-1" edge="1" parent="1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;elbow=vertical;startArrow=none;strokeColor=#000000;strokeWidth=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.25;entryDx=0;entryDy=0;" target="speed-recognition">
-          <mxGeometry relative="1" as="geometry">
-            <mxPoint x="270" y="215.5" as="sourcePoint" />
-            <mxPoint x="334" y="216.5" as="targetPoint" />
-          </mxGeometry>
+        <mxCell id="arrow-speed-to-cloud" edge="1" parent="1" source="speed-recognition" target="_fYH4QLw_KVy8iFZfCRF-5" style="rounded=0;html=1;endArrow=block;startArrow=none;strokeColor=#000000;strokeWidth=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;">
+          <mxGeometry relative="1" as="geometry" />
         </mxCell>
       </root>
     </mxGraphModel>
