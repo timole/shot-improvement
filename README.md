@@ -93,7 +93,13 @@ the full per-frame pass can exceed on a real clip), and
 [105](specs/105-shot-improvement-keep-temp-dir.md) (temporarily keeps
 each GUI recording's temp dir - raw/annotated frames + audio.wav -
 on disk instead of deleting it right after processing, path shown in
-the GUI, for manual inspection).
+the GUI, for manual inspection), and
+[106](specs/106-shot-improvement-shot-browser.md) (the GUI shows the
+detected shots - camera frame, hand boxes, spectrogram strip, km/h -
+right after a recording finishes, browsable in a list below the
+preview, well before the slower background video encode completes;
+"Vain nauhoitus" mode gets the same shot list without producing an
+mp4 at all).
 
 (Two earlier browser-based versions, specs 078 and 079, were built
 first and then replaced entirely — the original laptop this was built

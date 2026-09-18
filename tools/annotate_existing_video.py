@@ -40,7 +40,7 @@ import cv2
 import imageio_ffmpeg
 import soundfile as sf
 
-from core.compose import compose_annotated_frames, save_shot_images
+from core.compose import ShotImage, compose_annotated_frames, save_shot_images
 from core.recorder import FRAME_FILE_EXTENSION, encode_frames_with_audio
 from core.log_setup import get_logger, setup_logging
 
@@ -48,7 +48,7 @@ setup_logging()
 logger = get_logger("annotate_existing_video")
 
 
-def annotate_existing_video(raw_path: Path, shots_only: bool = False) -> tuple[Path | None, list[Path]]:
+def annotate_existing_video(raw_path: Path, shots_only: bool = False) -> tuple[Path | None, list[ShotImage]]:
     """Returns (annotated_mp4_path, [shot_image_paths]) - annotated_mp4_path
     is None when shots_only=True (nothing was encoded)."""
     if not raw_path.exists():
@@ -149,8 +149,9 @@ def main() -> None:
     shots_only = "--shots-only" in sys.argv[2:]
     out, shot_images = annotate_existing_video(raw_path, shots_only=shots_only)
     print(f"Done: {out}")
-    for p in shot_images:
-        print(f"  shot image: {p}")
+    for shot in shot_images:
+        speed = f"{round(shot.speed_kmh)} km/h" if shot.speed_kmh is not None else "no paired hit"
+        print(f"  shot image: {shot.path} ({speed})")
 
 
 if __name__ == "__main__":

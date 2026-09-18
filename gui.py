@@ -24,6 +24,7 @@ import cv2
 from PIL import Image, ImageTk
 
 from core import azure_sync, cloud_sync, devices, pending
+from core.compose import ShotImage
 from core.log_setup import get_logger, setup_logging
 from core.playback import SKIP_SECONDS, SPEED_OPTIONS, ClipPlayer, format_time
 from core.recorder import FRAME_HEIGHT, FRAME_WIDTH, RECORDINGS_DIR
@@ -100,7 +101,7 @@ class App:
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
         self.session: Optional[LiveSession] = None
-        self._mode = "live"  # "live" | "playback" - playback while a clip is loaded, whether playing or paused
+        self._mode = "live"  # "live" | "playback" | "shots" - see _on_shots_ready/_exit_shots_mode
         self._player: Optional[ClipPlayer] = None
         self._scrubbing = False  # user is dragging the timeline slider - suppress auto position updates
         self._next_frame_due = 0.0  # time.monotonic() value; paces _playback_tick() by player.frame_interval_s()
@@ -114,6 +115,10 @@ class App:
         # for the queue this list feeds.
         self._pending_items: list[pending.PendingRecording] = []
         self._processing_pending = False
+        # Spec 106: the shot list shown right after a recording (or a
+        # processed pending item) finishes - see _on_shots_ready,
+        # _show_shot, _exit_shots_mode.
+        self._shots: list[ShotImage] = []
 
         # Two columns: left_frame holds every control (camera/device
         # pickers, record row, transport buttons, speed/volume/
@@ -135,6 +140,7 @@ class App:
 
         self._build_record_row(self.left_frame)
         self._build_playback_controls(self.left_frame, self.center_frame)
+        self._build_shots_list(self.center_frame)
 
         self.status_var = tk.StringVar(value="Käynnistetään kameraa…")
         self.status_label = ttk.Label(self.left_frame, textvariable=self.status_var)
@@ -341,6 +347,32 @@ class App:
         ttk.Button(button_row, text="Toista", command=self.on_play_selected).pack(side="left", padx=4)
         ttk.Button(button_row, text="Poista", command=self.on_delete_selected).pack(side="left", padx=4)
 
+    def _build_shots_list(self, timeline_root: tk.Tk) -> None:
+        # Spec 106: hidden (not packed) until a recording produces at
+        # least one detected shot - see _on_shots_ready. Lives in the
+        # center column, under the video preview ("The list is below
+        # the video preview"), same placement idea as
+        # playback's timeline_frame.
+        self.shots_frame = ttk.Frame(timeline_root)
+        ttk.Label(self.shots_frame, text="Laukaukset:").pack(anchor="w", padx=8)
+        inner = ttk.Frame(self.shots_frame)
+        inner.pack(fill="both", expand=True, padx=8, pady=(0, 4))
+        self.shots_tree = ttk.Treeview(
+            inner, columns=("speed",), show="tree headings", height=5, selectmode="browse"
+        )
+        self.shots_tree.heading("#0", text="Laukaus")
+        self.shots_tree.heading("speed", text="Nopeus")
+        self.shots_tree.column("#0", width=120, anchor="w")
+        self.shots_tree.column("speed", width=100, anchor="w")
+        self.shots_tree.pack(side="left", fill="both", expand=True)
+        self.shots_tree.bind("<<TreeviewSelect>>", self.on_shot_selected)
+        scrollbar = ttk.Scrollbar(inner, orient="vertical", command=self.shots_tree.yview)
+        scrollbar.pack(side="right", fill="y")
+        self.shots_tree.config(yscrollcommand=scrollbar.set)
+        ttk.Button(self.shots_frame, text="Takaisin livekuvaan", command=self._exit_shots_mode).pack(
+            anchor="w", padx=8, pady=(0, 8)
+        )
+
     def _apply_layout(self) -> None:
         """Two columns side by side: controls, then the recordings
         list below them, on the left; the video (shown at
@@ -448,6 +480,12 @@ class App:
                 pass
             elif self._mode == "playback":
                 self._playback_tick()
+            elif self._mode == "shots":
+                # Nothing to do each tick - the displayed shot image is
+                # static until the user picks another row or leaves
+                # shots mode (see _exit_shots_mode), same idea as
+                # "playback" leaving the live feed alone while paused.
+                pass
             else:
                 self._live_tick()
         except Exception:
@@ -525,6 +563,7 @@ class App:
                 self._counting_down, self._mode,
             )
             return
+        self._exit_shots_mode()
         try:
             duration_s = float(self.duration_var.get())
         except ValueError:
@@ -551,6 +590,7 @@ class App:
             on_raw_ready=self._on_raw_ready,
             defer_processing=self.defer_processing_var.get(),
             on_deferred_saved=self._on_deferred_saved,
+            on_shots_ready=self._on_shots_ready,
         )
 
     @staticmethod
@@ -643,6 +683,52 @@ class App:
         self._sync_worker.upload_recording(
             result.annotated_path, on_done=make_on_done("merkitty", result.annotated_path), on_progress=make_on_progress("merkitty"),
         )
+
+    # --- shot browsing (spec 106) ----------------------------------------
+    #
+    # Fires once per recording (immediate or deferred alike - see
+    # core.session.LiveSession.start_recording's on_shots_ready) well
+    # before the rest of that recording's processing finishes: replaces
+    # the live preview with the first detected shot's image and shows
+    # the full list below it, so the result the user actually recorded
+    # for is visible immediately instead of after a slow background
+    # encode.
+
+    def _on_shots_ready(self, shots: list[ShotImage]) -> None:
+        self._shots = shots
+        self.shots_tree.delete(*self.shots_tree.get_children())
+        if not shots:
+            self._set_status_if_idle("Ei tunnistettuja laukauksia.")
+            return
+        for shot in shots:
+            speed_label = f"{round(shot.speed_kmh)} km/h" if shot.speed_kmh is not None else "—"
+            self.shots_tree.insert("", "end", iid=str(shot.index - 1), text=f"Laukaus {shot.index}", values=(speed_label,))
+        self._mode = "shots"
+        self.shots_frame.pack(fill="both", expand=True)
+        self.shots_tree.selection_set("0")
+
+    def on_shot_selected(self, _event=None) -> None:
+        selection = self.shots_tree.selection()
+        if not selection:
+            return
+        self._show_shot(int(selection[0]))
+
+    def _show_shot(self, index: int) -> None:
+        shot = self._shots[index]
+        frame = cv2.imread(str(shot.path))
+        if frame is None:
+            return
+        h, w = frame.shape[:2]
+        self._display_size = (640, round(640 * h / w))
+        self._show_frame(frame)
+
+    def _exit_shots_mode(self) -> None:
+        if self._mode != "shots":
+            return
+        self.shots_frame.pack_forget()
+        self._display_size = DISPLAY_SIZE
+        self._mode = "live"
+        self.status_var.set("Valmis.")
 
     def _on_sync_reconciled(self, exc: Optional[Exception]) -> None:
         if exc is not None:
@@ -779,6 +865,7 @@ class App:
                 self.session is not None, self.session.is_busy if self.session else None,
             )
             return
+        self._exit_shots_mode()
         self._close_player()
         self.status_var.set(f"Ladataan: {path.name}…")
         self.root.update_idletasks()

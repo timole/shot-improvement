@@ -35,12 +35,18 @@ Spec 099 adds save_shot_images(): a plain (unannotated, native-
 resolution) JPEG per detected shot, with just its puck speed burned in
 - a separate, simpler artifact from the -annotated.mp4 above, meant to
 be quickly skimmed or shared on its own.
+
+Spec 106 adds a spectrogram strip under each shot image (frame on top,
+strip below, same shape as the -annotated.mp4's own two bands) and a
+typed ShotImage return value, so the GUI can show these right after a
+recording finishes - well before the (much slower) full annotated
+video is ready - and browse between them.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Callable, Optional, Sequence
+from typing import Callable, NamedTuple, Optional, Sequence
 
 import cv2
 import numpy as np
@@ -310,16 +316,24 @@ def compose_annotated_frames(
     return True
 
 
-# Spec 099: a plain, unannotated snapshot per shot - native capture
-# resolution (no pose boxes, no spectrogram), just the puck-speed label
-# burned in. Deliberately separate constants from the claps-band/pair-
-# line ones above - this is a different-sized label on a different kind
-# of image (a single full-resolution frame, not a thin annotation band).
+# Spec 099: a snapshot per shot - native capture resolution frame (pose
+# boxes, spec 102) with the puck-speed label burned in, plus (spec 106) a
+# spectrogram strip underneath, same idea as the -annotated.mp4's own
+# bands but sized separately (a single full-resolution frame + a shorter
+# strip, not the video's own smaller composite).
 SHOT_IMAGE_FONT = cv2.FONT_HERSHEY_SIMPLEX
 SHOT_IMAGE_FONT_PX = 50  # target glyph height, not a cv2 "scale"
 SHOT_IMAGE_LABEL_COLOR_BGR = (255, 255, 255)  # white
 SHOT_IMAGE_MARGIN_BOTTOM = 30
 SHOT_IMAGE_JPEG_QUALITY = 92
+SHOT_SPECTROGRAM_HEIGHT = 200
+
+
+class ShotImage(NamedTuple):
+    index: int  # 1-based, matches the "-shot-NN.jpg" filename suffix
+    path: Path
+    time_s: float
+    speed_kmh: Optional[float]
 
 
 def _draw_bottom_centered_label(frame: np.ndarray, text: str, font_px: int, color) -> None:
@@ -344,22 +358,30 @@ def save_shot_images(
     sample_rate: int,
     out_dir: Path,
     filename_stem: str,
-) -> list[Path]:
+) -> list[ShotImage]:
     """For each detected "shot" - the first half of every chronologically
     paired shot/hit clap (core.claps.pair_claps), plus a trailing
-    unpaired final shot if the clip has one - saves the RAW camera
-    frame closest to that shot's real peak timestamp as a JPEG at
-    native capture resolution (no spectrogram - a different, simpler
-    image than the -annotated.mp4 this clip also gets), with hand
-    boxes (spec 102 - core.pose, yellow) and the computed puck speed
-    (white, black-outlined text at the bottom). The trailing unpaired
-    shot (no corresponding hit, so no computable speed) still gets an
-    image, with hand boxes but no speed text.
+    unpaired final shot if the clip has one - saves a JPEG stacking the
+    RAW camera frame closest to that shot's real peak timestamp (native
+    capture resolution, hand boxes - spec 102 - and the computed puck
+    speed burned in, white, black-outlined text at the bottom) on top of
+    a spectrogram strip (spec 106) marking this shot's instant with a
+    red playhead, same visual language as the -annotated.mp4's own
+    spectrogram band. The trailing unpaired shot (no corresponding hit,
+    so no computable speed) still gets an image, with hand boxes but no
+    speed text; its playhead still shows on the strip.
+
+    The strip - one per call, not per shot, since it's identical content
+    besides the playhead's position - carries every pair's yellow line +
+    km/h (core.compose.draw_pair_annotations), matching what the
+    annotated video shows for the same clip.
 
     Filenames: "<filename_stem>-shot-01.jpg", "-shot-02.jpg", ... in
     chronological order (2-digit, matching a typical single clip's
-    shot count - see spec 099 if this ever needs 3 digits). Returns
-    the list of saved paths, in that same order.
+    shot count - see spec 099 if this ever needs 3 digits). Returns a
+    ShotImage per saved file, in that same order - the GUI (spec 106)
+    uses this directly to build its shot list, no need to re-derive
+    times/speeds from the filename or re-run detection.
 
     Runs its own PoseDetector (spec 102) - by the time this is called,
     compose_annotated_frames' own detector has already been created
@@ -377,10 +399,19 @@ def save_shot_images(
     frame_paths = sorted(raw_dir.glob(f"*.{extension}"))
     frame_times_arr = np.asarray(frame_times, dtype=np.float64)
 
-    saved: list[Path] = []
+    saved: list[ShotImage] = []
     if not shots:
         logger.info("save_shot_images: no shots detected for %s", filename_stem)
         return saved
+
+    audio_duration_s = len(audio) / sample_rate if sample_rate > 0 else 0.0
+    first_frame = cv2.imread(str(frame_paths[0])) if frame_paths else None
+    if first_frame is None:
+        logger.warning("save_shot_images: no readable raw frame for %s, skipping", filename_stem)
+        return saved
+    strip_width = first_frame.shape[1]
+    spectrogram = compute_spectrogram_image(audio, strip_width, SHOT_SPECTROGRAM_HEIGHT)
+    draw_pair_annotations(spectrogram, pairs, audio_duration_s)
 
     with PoseDetector() as detector:
         for i, (shot_t, hit_t) in enumerate(shots, start=1):
@@ -395,14 +426,20 @@ def save_shot_images(
             boxes = detector.detect(frame, i)
             draw_palm_boxes(frame, boxes)
 
+            speed_kmh: Optional[float] = None
             if hit_t is not None:
-                speed = puck_speed_kmh(shot_t, hit_t)
-                if speed is not None:
-                    _draw_bottom_centered_label(frame, f"{round(speed)} km/h", SHOT_IMAGE_FONT_PX, SHOT_IMAGE_LABEL_COLOR_BGR)
+                speed_kmh = puck_speed_kmh(shot_t, hit_t)
+                if speed_kmh is not None:
+                    _draw_bottom_centered_label(frame, f"{round(speed_kmh)} km/h", SHOT_IMAGE_FONT_PX, SHOT_IMAGE_LABEL_COLOR_BGR)
+
+            strip = spectrogram.copy()
+            x = _x_for_time(shot_t, audio_duration_s, strip_width)
+            cv2.line(strip, (x, 0), (x, strip.shape[0] - 1), PLAYHEAD_COLOR_BGR, PLAYHEAD_THICKNESS)
+            composite = np.vstack([frame, strip])
 
             out_path = out_dir / f"{filename_stem}-shot-{i:02d}.jpg"
-            cv2.imwrite(str(out_path), frame, [cv2.IMWRITE_JPEG_QUALITY, SHOT_IMAGE_JPEG_QUALITY])
-            saved.append(out_path)
+            cv2.imwrite(str(out_path), composite, [cv2.IMWRITE_JPEG_QUALITY, SHOT_IMAGE_JPEG_QUALITY])
+            saved.append(ShotImage(index=i, path=out_path, time_s=shot_t, speed_kmh=speed_kmh))
 
     logger.info("save_shot_images: saved %d shot image(s) for %s", len(saved), filename_stem)
     return saved

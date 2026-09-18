@@ -10,6 +10,7 @@ No camera, no PoseDetector, no disk - pure array comparison,
 milliseconds."""
 
 import numpy as np
+import pytest
 
 from core.compose import (
     CLAP_TICK_COLOR_BGR,
@@ -17,6 +18,7 @@ from core.compose import (
     PAIR_LINE_COLOR_BGR,
     PAIR_LINE_Y,
     SHOT_IMAGE_LABEL_COLOR_BGR,
+    SHOT_SPECTROGRAM_HEIGHT,
     _x_for_time,
     composite_into,
     draw_pair_annotations,
@@ -266,10 +268,13 @@ def test_save_shot_images_creates_one_image_per_paired_shot(tmp_path) -> None:
     saved = save_shot_images(raw_dir, "bmp", frame_times, audio, 44100, out_dir, "clip")
 
     assert len(saved) == 1
-    assert saved[0].name == "clip-shot-01.jpg"
-    assert saved[0].exists()
-    img = cv2.imread(str(saved[0]))
-    assert img.shape == (240, 320, 3)
+    assert saved[0].index == 1
+    assert saved[0].path.name == "clip-shot-01.jpg"
+    assert saved[0].path.exists()
+    assert saved[0].time_s == pytest.approx(2.0, abs=0.3)
+    assert saved[0].speed_kmh is not None
+    img = cv2.imread(str(saved[0].path))
+    assert img.shape == (240 + SHOT_SPECTROGRAM_HEIGHT, 320, 3)
 
 
 def test_save_shot_images_picks_the_frame_nearest_the_shot_time(tmp_path) -> None:
@@ -288,7 +293,7 @@ def test_save_shot_images_picks_the_frame_nearest_the_shot_time(tmp_path) -> Non
 
     # shot time ~2.0s with 20 frames over 10.0s (~0.526s apart) -> frame index round(2.0/0.526) ~ 3-4
     expected_idx = int(round(2.0 / (duration_s / (frame_count - 1))))
-    img = cv2.imread(str(saved[0]))
+    img = cv2.imread(str(saved[0].path))
     top_strip_blue_channel = int(img[5, 5, 0])  # BGR - blue channel encodes the frame index (see _write_indexed_frames)
     expected_color = int(expected_idx * 5 % 256)
     assert abs(top_strip_blue_channel - expected_color) <= 10  # small tolerance for JPEG compression
@@ -308,12 +313,16 @@ def test_save_shot_images_includes_trailing_unpaired_shot_without_speed_text(tmp
 
     saved = save_shot_images(raw_dir, "bmp", frame_times, audio, 44100, out_dir, "clip")
 
-    assert [p.name for p in saved] == ["clip-shot-01.jpg", "clip-shot-02.jpg"]
-    trailing_img = cv2.imread(str(saved[1]))
-    bottom_strip = trailing_img[-40:, :]
-    # No white speed-label pixels should be present - the base frame is
-    # a flat dark red, no channel anywhere near white.
-    assert not np.any(np.all(bottom_strip > np.array(SHOT_IMAGE_LABEL_COLOR_BGR) - 20, axis=-1))
+    assert [s.path.name for s in saved] == ["clip-shot-01.jpg", "clip-shot-02.jpg"]
+    assert saved[0].speed_kmh is not None
+    assert saved[1].speed_kmh is None
+    trailing_img = cv2.imread(str(saved[1].path))
+    frame_height = 240
+    bottom_of_frame = trailing_img[frame_height - 40 : frame_height, :]
+    # No white speed-label pixels should be present in the camera-frame
+    # portion (rows 0..frame_height) - the base frame is a flat dark
+    # red, no channel anywhere near white.
+    assert not np.any(np.all(bottom_of_frame > np.array(SHOT_IMAGE_LABEL_COLOR_BGR) - 20, axis=-1))
 
 
 def test_save_shot_images_returns_empty_list_when_no_claps(tmp_path) -> None:
@@ -329,3 +338,4 @@ def test_save_shot_images_returns_empty_list_when_no_claps(tmp_path) -> None:
     saved = save_shot_images(raw_dir, "bmp", frame_times, silent_audio, 44100, out_dir, "clip")
 
     assert saved == []
+    assert list(out_dir.glob("*.jpg")) == []

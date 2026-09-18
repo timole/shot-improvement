@@ -26,7 +26,7 @@ import numpy as np
 import sounddevice as sd
 import soundfile as sf
 
-from .compose import compose_annotated_frames, save_shot_images
+from .compose import ShotImage, compose_annotated_frames, save_shot_images
 from .log_setup import get_logger
 from .pending import PENDING_DIR, delete_pending, write_meta
 from .pose import PoseDetector, draw_palm_boxes
@@ -113,6 +113,7 @@ class LiveSession:
         self._out_dir: Optional[Path] = None
         self._audio_buffer: Optional[np.ndarray] = None
         self._on_recording_done: Optional[Callable[[Optional[RecordingResult]], None]] = None
+        self._on_shots_ready: Callable[[list[ShotImage]], None] = lambda shots: None
         self._consecutive_read_failures = 0
         # Spec 091: a count, not a bool - a new recording can now start
         # (see start_recording()) while an older one's background worker
@@ -226,6 +227,7 @@ class LiveSession:
         on_raw_ready: Callable[[Path], None] = lambda raw_path: None,
         defer_processing: bool = False,
         on_deferred_saved: Callable[[bool], None] = lambda ok: None,
+        on_shots_ready: Callable[[list[ShotImage]], None] = lambda shots: None,
     ) -> None:
         """dispatch, if given, is used to run on_done back on whatever
         thread called start_recording (e.g. Tkinter's root.after(0, fn))
@@ -243,6 +245,14 @@ class LiveSession:
         copy/cloud sync) completes (spec 091). The GUI uses this to show
         the new recording in its list and re-enable the record button
         immediately, rather than waiting for on_done.
+
+        on_shots_ready(shots), if given, is called (also via dispatch)
+        once save_shot_images() has produced its list of ShotImages
+        (spec 106) - BEFORE on_raw_ready in the normal path (the whole
+        point: this is the fast, useful result, ready before the much
+        slower raw/annotated encodes even start), and, in
+        defer_processing mode, shortly after on_deferred_saved with no
+        mp4 involved at all. Empty list means no shots were detected.
 
         defer_processing (spec 093): when True, this recording's frames
         are captured exactly as normal, but NO processing (pose
@@ -272,6 +282,7 @@ class LiveSession:
         self._on_progress = on_progress
         self._on_raw_ready = on_raw_ready
         self._on_deferred_saved = on_deferred_saved
+        self._on_shots_ready = on_shots_ready
         self._defer_processing = defer_processing
         # A PoseDetector reused continuously across a long idle-preview
         # session (minutes of frames, possibly a prior recording too)
@@ -443,19 +454,24 @@ class LiveSession:
         audio_buffer = self._audio_buffer
         dispatch = self._dispatch
         timestamp = self._timestamp
+        on_shots_ready = self._on_shots_ready
         if self._defer_processing:
-            self._finish_deferred_recording(elapsed_s, frame_count, frame_times, audio_buffer, dispatch)
+            self._finish_deferred_recording(elapsed_s, frame_count, frame_times, audio_buffer, dispatch, on_shots_ready)
         else:
-            self._finish_immediate_recording(elapsed_s, frame_count, frame_times, audio_buffer, dispatch, timestamp)
+            self._finish_immediate_recording(elapsed_s, frame_count, frame_times, audio_buffer, dispatch, timestamp, on_shots_ready)
 
     def _finish_immediate_recording(
         self, elapsed_s: float, frame_count: int, frame_times: list[float], audio_buffer: np.ndarray,
         dispatch: Callable[[Callable[[], None]], None], timestamp: str,
+        on_shots_ready: Callable[[list[ShotImage]], None],
     ) -> None:
-        """The normal path: encode raw -> on_raw_ready -> compose
-        annotated frames (spec 092) -> encode annotated, all on a
-        background thread. See _finish_deferred_recording for the
-        "Vain nauhoitus" (spec 093) alternative."""
+        """The normal path: write audio -> shot images -> on_shots_ready
+        (spec 106, moved ahead of the encodes below - it's the fast,
+        useful result and shouldn't wait behind them) -> encode raw ->
+        on_raw_ready -> compose annotated frames (spec 092) -> encode
+        annotated, all on a background thread. See
+        _finish_deferred_recording for the "Vain nauhoitus" (spec 093)
+        alternative."""
         tmp_dir = self._tmp_dir
         tmp_dir_path = self._tmp_dir_path
         raw_dir, annotated_dir, out_dir = self._raw_dir, self._annotated_dir, self._out_dir
@@ -490,8 +506,22 @@ class LiveSession:
 
                     raw_out = out_dir / f"shot-improvement-{timestamp}.mp4"
                     annotated_out = out_dir / f"shot-improvement-{timestamp}-annotated.mp4"
+
+                    # Spec 106: shot images (frame + spectrogram strip
+                    # per detected shot) run FIRST, ahead of both
+                    # encodes - it's the fast, immediately useful result
+                    # the GUI shows in place of the live preview, and it
+                    # shouldn't wait behind the much slower raw/annotated
+                    # ffmpeg passes below.
+                    with profiler.accum("shot_images"):
+                        shots = save_shot_images(
+                            raw_dir, FRAME_FILE_EXTENSION, frame_times, audio_buffer, SAMPLE_RATE,
+                            out_dir, f"shot-improvement-{timestamp}",
+                        )
+                    dispatch(lambda: on_shots_ready(shots))
+
                     # Spec 091: the raw clip needs no pose annotation at
-                    # all, so it's encoded FIRST and handed to
+                    # all, so it's encoded next and handed to
                     # on_raw_ready immediately - the GUI shows it in the
                     # recordings list and re-enables the record button
                     # right away, well before the slower annotate/
@@ -525,13 +555,6 @@ class LiveSession:
                         on_progress=report("Tunnistetaan käsien asentoja ja spektrogrammi"),
                         profiler=profiler,
                     )
-                    # Spec 099: a plain snapshot + speed label per
-                    # detected shot, alongside the raw/annotated mp4s.
-                    with profiler.accum("shot_images"):
-                        save_shot_images(
-                            raw_dir, FRAME_FILE_EXTENSION, frame_times, audio_buffer, SAMPLE_RATE,
-                            out_dir, f"shot-improvement-{timestamp}",
-                        )
                     encode_frames_with_audio(
                         annotated_dir, audio_tmp, annotated_out, actual_fps, frame_count,
                         frame_times=frame_times,
@@ -566,20 +589,28 @@ class LiveSession:
     def _finish_deferred_recording(
         self, elapsed_s: float, frame_count: int, frame_times: list[float], audio_buffer: np.ndarray,
         dispatch: Callable[[Callable[[], None]], None],
+        on_shots_ready: Callable[[list[ShotImage]], None],
     ) -> None:
         """Spec 093: "Vain nauhoitus" mode - persists raw frames + audio
-        to a durable pending/ entry and stops, with NO processing (pose
-        annotation, spectrogram, ffmpeg encoding) run at all.
-        core.pending.process_pending_recording(), triggered later by the
-        user (the GUI's "Käsittele odottavat" button), turns it into
-        mp4s on request."""
+        to a durable pending/ entry, with NO video processing (pose
+        annotation over the whole clip, spectrogram video band, ffmpeg
+        encoding) run at all - core.pending.process_pending_recording(),
+        triggered later by the user (the GUI's "Käsittele odottavat"
+        button), turns it into mp4s on request.
+
+        Spec 106: shot images ARE produced here, right away - they only
+        need audio (claps detection) plus the handful of already-saved
+        raw frames nearest each shot, so they're cheap enough to keep
+        this mode "fluent" while still giving the same immediate shot
+        browsing as a normal recording. No mp4 is written either way."""
         pending_dir = self._pending_capture_dir
         raw_dir = self._raw_dir
         video_name, audio_name = self.video_name, self.audio_name
         duration_s = self._record_duration
         on_deferred_saved = self._on_deferred_saved
+        out_dir, timestamp = self._out_dir, self._timestamp
         logger.info(
-            "finish_recording (deferred): %d frames in %.2fs, saving to %s (no processing)",
+            "finish_recording (deferred): %d frames in %.2fs, saving to %s (no video processing)",
             frame_count, elapsed_s, pending_dir,
         )
 
@@ -604,6 +635,21 @@ class LiveSession:
                         "finish_recording (deferred): saved %d frames (%.1f fps) -> %s",
                         frame_count, actual_fps, pending_dir,
                     )
+
+                    try:
+                        out_dir.mkdir(parents=True, exist_ok=True)
+                        shots = save_shot_images(
+                            raw_dir, FRAME_FILE_EXTENSION, frame_times, audio_buffer, SAMPLE_RATE,
+                            out_dir, f"shot-improvement-{timestamp}",
+                        )
+                        dispatch(lambda: on_shots_ready(shots))
+                    except Exception:
+                        # The recording itself is already safely persisted
+                        # to pending/ at this point (ok is already True) -
+                        # a failure here only loses the immediate preview,
+                        # not the footage, so it must not report the whole
+                        # recording as failed.
+                        logger.exception("finish_recording (deferred): shot images failed for %s", raw_dir)
             except Exception:
                 logger.exception("finish_recording (deferred): save failed for %s", raw_dir)
                 ok = False
