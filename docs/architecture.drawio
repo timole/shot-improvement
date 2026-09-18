@@ -6,7 +6,7 @@
         <mxCell id="1" parent="0" />
 
         <!-- Edge group (laptop: capture + on-device pose annotation) -->
-        <mxCell id="edge-group" value="Edge (laptop)" style="rounded=1;arcSize=6;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;strokeWidth=2;verticalAlign=top;align=center;fontSize=14;fontStyle=1;spacingTop=10;dashed=1;" vertex="1" parent="1">
+        <mxCell id="edge-group" value="Edge (laptop)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;strokeWidth=2;verticalAlign=top;align=center;fontSize=14;fontStyle=1;fontFamily=Arial;spacingTop=10;dashed=0;" vertex="1" parent="1">
           <mxGeometry x="40" y="60" width="380" height="280" as="geometry" />
         </mxCell>
 
@@ -23,7 +23,7 @@
         <mxCell id="camera-lens-inner" value="" style="ellipse;whiteSpace=wrap;html=1;fillColor=#6c8ebf;strokeColor=none;" vertex="1" parent="1">
           <mxGeometry x="88.5" y="120.5" width="8" height="8" as="geometry" />
         </mxCell>
-        <mxCell id="camera-label" value="Camera" style="text;html=1;align=center;verticalAlign=middle;fontSize=11;fontStyle=1;" vertex="1" parent="1">
+        <mxCell id="camera-label" value="Camera" style="text;html=1;align=center;verticalAlign=middle;fontSize=11;fontStyle=1;fontFamily=Arial;" vertex="1" parent="1">
           <mxGeometry x="55" y="144" width="75" height="16" as="geometry" />
         </mxCell>
 
@@ -37,28 +37,33 @@
         <mxCell id="mic-base" value="" style="line;strokeColor=#82b366;strokeWidth=2;html=1;" vertex="1" parent="1">
           <mxGeometry x="74" y="228" width="20" height="2" as="geometry" />
         </mxCell>
-        <mxCell id="mic-label" value="Microphone" style="text;html=1;align=center;verticalAlign=middle;fontSize=11;fontStyle=1;" vertex="1" parent="1">
+        <mxCell id="mic-label" value="Microphone" style="text;html=1;align=center;verticalAlign=middle;fontSize=11;fontStyle=1;fontFamily=Arial;" vertex="1" parent="1">
           <mxGeometry x="44" y="232" width="80" height="16" as="geometry" />
         </mxCell>
 
         <!-- Raw data (local storage) -->
-        <mxCell id="raw-data" value="Raw data&#10;(video + audio,&#10;local disk)" style="rounded=1;arcSize=10;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;strokeWidth=2;fontSize=11;align=center;verticalAlign=middle;" vertex="1" parent="1">
+        <mxCell id="raw-data" value="Raw data&#10;(video + audio,&#10;local disk)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d6b656;strokeWidth=2;fontSize=11;fontFamily=Arial;align=center;verticalAlign=middle;" vertex="1" parent="1">
           <mxGeometry x="160" y="120" width="110" height="60" as="geometry" />
         </mxCell>
 
         <!-- Pose annotation (on-device) - same row as Raw data, to its right -->
-        <mxCell id="pose-annotation" value="Pose annotation&#10;(on-device,&#10;MediaPipe)" style="rounded=1;arcSize=10;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;strokeWidth=2;fontSize=11;align=center;verticalAlign=middle;" vertex="1" parent="1">
+        <mxCell id="pose-annotation" value="Pose annotation&#10;(on-device,&#10;MediaPipe)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#9673a6;strokeWidth=2;fontSize=11;fontFamily=Arial;align=center;verticalAlign=middle;" vertex="1" parent="1">
           <mxGeometry x="290" y="120" width="110" height="60" as="geometry" />
         </mxCell>
 
         <!-- Cloud group (blob storage) -->
-        <mxCell id="cloud-group" value="Cloud" style="rounded=1;arcSize=6;whiteSpace=wrap;html=1;fillColor=#eaf6ff;strokeColor=#666666;strokeWidth=2;verticalAlign=top;align=center;fontSize=14;fontStyle=1;spacingTop=10;dashed=1;" vertex="1" parent="1">
+        <mxCell id="cloud-group" value="Cloud" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#eaf6ff;strokeColor=#666666;strokeWidth=2;verticalAlign=top;align=center;fontSize=14;fontStyle=1;fontFamily=Arial;spacingTop=10;dashed=0;" vertex="1" parent="1">
           <mxGeometry x="480" y="60" width="250" height="280" as="geometry" />
         </mxCell>
 
         <!-- Blob storage (unchanged size) -->
-        <mxCell id="_fYH4QLw_KVy8iFZfCRF-5" parent="1" style="image;aspect=fixed;html=1;points=[];align=center;fontSize=12;image=img/lib/azure2/general/Blob_Block.svg;" value="Blob storage" vertex="1">
+        <mxCell id="_fYH4QLw_KVy8iFZfCRF-5" parent="1" style="image;aspect=fixed;html=1;points=[];align=center;fontSize=12;fontFamily=Arial;image=img/lib/azure2/general/Blob_Block.svg;" value="Blob storage" vertex="1">
           <mxGeometry height="52" width="65" x="570" y="120" as="geometry" />
+        </mxCell>
+
+        <!-- Azure logo, top-left corner of the Cloud group -->
+        <mxCell id="azure-logo" parent="1" style="image;aspect=fixed;html=1;points=[];image=img/lib/azure2/other/Azure_A.svg;" value="" vertex="1">
+          <mxGeometry height="28" width="28" x="492" y="72" as="geometry" />
         </mxCell>
 
         <!-- Flow, left to right: capture -> raw data -> pose annotation -> cloud -->
