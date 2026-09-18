@@ -1,94 +1,77 @@
 <mxfile host="Electron" agent="shot-improvement">
   <diagram name="Architecture" id="shot-improvement-architecture">
-    <mxGraphModel dx="678" dy="780" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="850" pageHeight="500" math="0" shadow="0">
+    <mxGraphModel dx="848" dy="446" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="850" pageHeight="500" math="0" shadow="0">
       <root>
         <mxCell id="0" />
         <mxCell id="1" parent="0" />
-
-        <!-- Edge group (laptop: capture + on-device pose annotation) -->
-        <mxCell id="edge-group" value="Edge (laptop)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;strokeWidth=2;verticalAlign=top;align=center;fontSize=14;fontStyle=1;fontFamily=Arial;spacingTop=10;dashed=0;" vertex="1" parent="1">
-          <mxGeometry x="40" y="60" width="380" height="280" as="geometry" />
+        <mxCell id="edge-group" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;strokeWidth=2;verticalAlign=top;align=center;fontSize=14;fontStyle=1;fontFamily=Arial;spacingTop=10;dashed=0;" value="Edge (laptop)" vertex="1">
+          <mxGeometry height="280" width="380" x="40" y="60" as="geometry" />
         </mxCell>
-
-        <!-- Camera icon (50% of original size) -->
-        <mxCell id="camera-body" value="" style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;strokeWidth=2;" vertex="1" parent="1">
-          <mxGeometry x="70" y="110" width="45" height="30" as="geometry" />
+        <mxCell id="camera-body" parent="1" style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;strokeWidth=2;" value="" vertex="1">
+          <mxGeometry height="30" width="45" x="66.5" y="137" as="geometry" />
         </mxCell>
-        <mxCell id="camera-bump" value="" style="rounded=1;arcSize=25;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;strokeWidth=2;" vertex="1" parent="1">
-          <mxGeometry x="80" y="103" width="13" height="8" as="geometry" />
+        <mxCell id="camera-bump" parent="1" style="rounded=1;arcSize=25;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;strokeWidth=2;" value="" vertex="1">
+          <mxGeometry height="8" width="13" x="76.5" y="130" as="geometry" />
         </mxCell>
-        <mxCell id="camera-lens-outer" value="" style="ellipse;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#6c8ebf;strokeWidth=2;" vertex="1" parent="1">
-          <mxGeometry x="84" y="116" width="17" height="17" as="geometry" />
+        <mxCell id="camera-lens-outer" parent="1" style="ellipse;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#6c8ebf;strokeWidth=2;" value="" vertex="1">
+          <mxGeometry height="17" width="17" x="80.5" y="143" as="geometry" />
         </mxCell>
-        <mxCell id="camera-lens-inner" value="" style="ellipse;whiteSpace=wrap;html=1;fillColor=#6c8ebf;strokeColor=none;" vertex="1" parent="1">
-          <mxGeometry x="88.5" y="120.5" width="8" height="8" as="geometry" />
+        <mxCell id="camera-lens-inner" parent="1" style="ellipse;whiteSpace=wrap;html=1;fillColor=#6c8ebf;strokeColor=none;" value="" vertex="1">
+          <mxGeometry height="8" width="8" x="85" y="147.5" as="geometry" />
         </mxCell>
-        <mxCell id="camera-label" value="Camera" style="text;html=1;align=center;verticalAlign=middle;fontSize=11;fontStyle=1;fontFamily=Arial;" vertex="1" parent="1">
-          <mxGeometry x="55" y="144" width="75" height="16" as="geometry" />
+        <mxCell id="camera-label" parent="1" style="text;html=1;align=center;verticalAlign=middle;fontSize=11;fontStyle=1;fontFamily=Arial;" value="Camera" vertex="1">
+          <mxGeometry height="16" width="75" x="51.5" y="171" as="geometry" />
         </mxCell>
-
-        <!-- Microphone icon (50% of original size) -->
-        <mxCell id="mic-head" value="" style="rounded=1;arcSize=50;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;strokeWidth=2;" vertex="1" parent="1">
-          <mxGeometry x="75" y="190" width="18" height="28" as="geometry" />
+        <mxCell id="mic-head" parent="1" style="rounded=1;arcSize=50;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;strokeWidth=2;" value="" vertex="1">
+          <mxGeometry height="28" width="18" x="77.5" y="202" as="geometry" />
         </mxCell>
-        <mxCell id="mic-stand" value="" style="line;strokeColor=#82b366;strokeWidth=2;html=1;" vertex="1" parent="1">
-          <mxGeometry x="83" y="218" width="2" height="10" as="geometry" />
+        <mxCell id="mic-stand" parent="1" style="line;strokeColor=#82b366;strokeWidth=2;html=1;" value="" vertex="1">
+          <mxGeometry height="10" width="2" x="85.5" y="230" as="geometry" />
         </mxCell>
-        <mxCell id="mic-base" value="" style="line;strokeColor=#82b366;strokeWidth=2;html=1;" vertex="1" parent="1">
-          <mxGeometry x="74" y="228" width="20" height="2" as="geometry" />
+        <mxCell id="mic-base" parent="1" style="line;strokeColor=#82b366;strokeWidth=2;html=1;" value="" vertex="1">
+          <mxGeometry height="2" width="20" x="76.5" y="240" as="geometry" />
         </mxCell>
-        <mxCell id="mic-label" value="Microphone" style="text;html=1;align=center;verticalAlign=middle;fontSize=11;fontStyle=1;fontFamily=Arial;" vertex="1" parent="1">
-          <mxGeometry x="44" y="232" width="80" height="16" as="geometry" />
+        <mxCell id="mic-label" parent="1" style="text;html=1;align=center;verticalAlign=middle;fontSize=11;fontStyle=1;fontFamily=Arial;" value="Microphone" vertex="1">
+          <mxGeometry height="16" width="80" x="46.5" y="244" as="geometry" />
         </mxCell>
-
-        <!-- Raw data (local storage) -->
-        <mxCell id="raw-data" value="Raw data&#10;(video + audio,&#10;local disk)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d6b656;strokeWidth=2;fontSize=11;fontFamily=Arial;align=center;verticalAlign=middle;" vertex="1" parent="1">
-          <mxGeometry x="160" y="120" width="110" height="60" as="geometry" />
+        <mxCell id="raw-data" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d6b656;strokeWidth=2;fontSize=11;fontFamily=Arial;align=center;verticalAlign=middle;" value="Raw data&#xa;(video + audio,&#xa;local disk)" vertex="1">
+          <mxGeometry height="140" width="110" x="160" y="120" as="geometry" />
         </mxCell>
-
-        <!-- Pose annotation (on-device) - same row as Raw data, to its right -->
-        <mxCell id="pose-annotation" value="Pose annotation&#10;(on-device,&#10;MediaPipe)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#9673a6;strokeWidth=2;fontSize=11;fontFamily=Arial;align=center;verticalAlign=middle;" vertex="1" parent="1">
-          <mxGeometry x="290" y="120" width="110" height="60" as="geometry" />
+        <mxCell id="pose-annotation" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#9673a6;strokeWidth=2;fontSize=11;fontFamily=Arial;align=center;verticalAlign=middle;" value="Pose annotation&#xa;(on-device,&#xa;MediaPipe)" vertex="1">
+          <mxGeometry height="60" width="110" x="290" y="120" as="geometry" />
         </mxCell>
-
-        <!-- Speed recognition (audio analysis) - on-device, below Pose annotation -->
-        <mxCell id="speed-recognition" value="Speed recognition&#10;(audio analysis)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d79b00;strokeWidth=2;fontSize=11;fontFamily=Arial;align=center;verticalAlign=middle;" vertex="1" parent="1">
-          <mxGeometry x="290" y="200" width="110" height="60" as="geometry" />
+        <mxCell id="speed-recognition" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d79b00;strokeWidth=2;fontSize=11;fontFamily=Arial;align=center;verticalAlign=middle;" value="Speed recognition&#xa;(audio analysis)" vertex="1">
+          <mxGeometry height="60" width="110" x="290" y="200" as="geometry" />
         </mxCell>
-
-        <!-- Cloud group (blob storage) -->
-        <mxCell id="cloud-group" value="Cloud" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#eaf6ff;strokeColor=#666666;strokeWidth=2;verticalAlign=top;align=center;fontSize=14;fontStyle=1;fontFamily=Arial;spacingTop=10;dashed=0;" vertex="1" parent="1">
-          <mxGeometry x="480" y="60" width="250" height="280" as="geometry" />
+        <mxCell id="cloud-group" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#eaf6ff;strokeColor=#666666;strokeWidth=2;verticalAlign=top;align=center;fontSize=14;fontStyle=1;fontFamily=Arial;spacingTop=10;dashed=0;" value="Cloud" vertex="1">
+          <mxGeometry height="280" width="250" x="480" y="60" as="geometry" />
         </mxCell>
-
-        <!-- Blob storage (unchanged size) -->
         <mxCell id="_fYH4QLw_KVy8iFZfCRF-5" parent="1" style="image;aspect=fixed;html=1;points=[];align=center;fontSize=12;fontFamily=Arial;image=img/lib/azure2/general/Blob_Block.svg;" value="Blob storage" vertex="1">
           <mxGeometry height="52" width="65" x="570" y="120" as="geometry" />
         </mxCell>
-
-        <!-- Azure logo, top-left corner of the Cloud group -->
         <mxCell id="azure-logo" parent="1" style="image;aspect=fixed;html=1;points=[];image=img/lib/azure2/other/Azure_A.svg;" value="" vertex="1">
           <mxGeometry height="28" width="28" x="492" y="72" as="geometry" />
         </mxCell>
-
-        <!-- Flow, left to right: capture -> raw data -> pose annotation -> cloud -->
-        <mxCell id="arrow-camera" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;elbow=vertical;startArrow=none;strokeColor=#000000;strokeWidth=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.3;entryDx=0;entryDy=0;" edge="1" parent="1" source="camera-body" target="raw-data">
+        <mxCell id="arrow-camera" edge="1" parent="1" source="camera-body" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;elbow=vertical;startArrow=none;strokeColor=#000000;strokeWidth=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=-0.005;entryY=0.227;entryDx=0;entryDy=0;entryPerimeter=0;" target="raw-data">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="arrow-mic" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;elbow=vertical;startArrow=none;strokeColor=#000000;strokeWidth=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.7;entryDx=0;entryDy=0;" edge="1" parent="1" source="mic-head" target="raw-data">
+        <mxCell id="arrow-mic" edge="1" parent="1" source="mic-head" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;elbow=vertical;startArrow=none;strokeColor=#000000;strokeWidth=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=-0.003;entryY=0.692;entryDx=0;entryDy=0;entryPerimeter=0;" target="raw-data">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="arrow-raw-to-pose" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;elbow=vertical;startArrow=none;strokeColor=#000000;strokeWidth=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="raw-data" target="pose-annotation">
+        <mxCell id="arrow-raw-to-pose" edge="1" parent="1" source="raw-data" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;elbow=vertical;startArrow=none;strokeColor=#000000;strokeWidth=1;exitX=1;exitY=0.2143;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" target="pose-annotation">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="arrow-raw-to-speed" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;elbow=vertical;startArrow=none;strokeColor=#000000;strokeWidth=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="raw-data" target="speed-recognition">
+        <mxCell id="arrow-pose-to-cloud" edge="1" parent="1" source="pose-annotation" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;elbow=vertical;startArrow=none;strokeColor=#000000;strokeWidth=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.3;entryDx=0;entryDy=0;" target="_fYH4QLw_KVy8iFZfCRF-5">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="arrow-pose-to-cloud" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;elbow=vertical;startArrow=none;strokeColor=#000000;strokeWidth=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.3;entryDx=0;entryDy=0;" edge="1" parent="1" source="pose-annotation" target="_fYH4QLw_KVy8iFZfCRF-5">
+        <mxCell id="arrow-speed-to-cloud" edge="1" parent="1" source="speed-recognition" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;elbow=vertical;startArrow=none;strokeColor=#000000;strokeWidth=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.7;entryDx=0;entryDy=0;" target="_fYH4QLw_KVy8iFZfCRF-5">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="arrow-speed-to-cloud" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;elbow=vertical;startArrow=none;strokeColor=#000000;strokeWidth=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.7;entryDx=0;entryDy=0;" edge="1" parent="1" source="speed-recognition" target="_fYH4QLw_KVy8iFZfCRF-5">
-          <mxGeometry relative="1" as="geometry" />
+        <mxCell id="1azYyrGc3ZP5ukuMEKm7-1" edge="1" parent="1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;elbow=vertical;startArrow=none;strokeColor=#000000;strokeWidth=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.25;entryDx=0;entryDy=0;" target="speed-recognition">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="270" y="215.5" as="sourcePoint" />
+            <mxPoint x="334" y="216.5" as="targetPoint" />
+          </mxGeometry>
         </mxCell>
       </root>
     </mxGraphModel>
