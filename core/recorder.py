@@ -75,12 +75,16 @@ PREFERRED_VIDEO_LABEL = "c922"
 PREFERRED_MIC_LABEL = "c922"
 PREFERRED_SPEAKER_LABEL = "jabra"
 SAMPLE_RATE = 44100
-FRAME_WIDTH = 1280
-FRAME_HEIGHT = 720
+# Spec 115: 640x360 @ 30fps (was 1280x720 @ 60fps requested) - measured
+# real camera delivery is ~30 unique frames/sec at any resolution (spec
+# 113), and a smaller frame is much lighter on this 3.83GB machine's
+# memory/disk during capture and processing.
+FRAME_WIDTH = 640
+FRAME_HEIGHT = 360
 # Requested as a ceiling when opening a camera - cv2/DirectShow negotiates
 # down to whatever the device actually supports; read back afterward
 # (cap.get(cv2.CAP_PROP_FPS)) for the real value, never assumed.
-REQUESTED_FPS_CEILING = 60.0
+REQUESTED_FPS_CEILING = 30.0
 # Spec 086 found real captured fps stuck around 8-9fps and blamed this
 # machine's CPU. That was wrong on two counts, both found and fixed in
 # spec 088: (1) PREFERRED_VIDEO_LABEL="logitech" never actually matched

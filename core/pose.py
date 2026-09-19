@@ -32,7 +32,7 @@ MODEL_URL = (
 MODEL_PATH = Path(__file__).resolve().parent.parent / "models" / "pose_landmarker_lite.task"
 
 VISIBILITY_THRESHOLD = 0.5
-BOX_SIZE = 40  # spec 100: halved from 80
+BOX_SIZE = 20  # spec 100: halved from 80; spec 115: halved again for 640x360 capture
 BOX_COLOR_BGR = (0, 255, 255)  # yellow (spec 102) - OpenCV drawing is BGR, not RGB
 
 # (wrist, pinky-knuckle, index-knuckle, label) - BlazePose indices.
@@ -88,7 +88,7 @@ def draw_palm_boxes(frame_bgr: np.ndarray, boxes: Sequence[PalmBox]) -> None:
     half = BOX_SIZE // 2
     for box in boxes:
         x, y = int(box.cx), int(box.cy)
-        cv2.rectangle(frame_bgr, (x - half, y - half), (x + half, y + half), BOX_COLOR_BGR, 4)
+        cv2.rectangle(frame_bgr, (x - half, y - half), (x + half, y + half), BOX_COLOR_BGR, 2)
 
 
 class PoseDetector:

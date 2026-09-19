@@ -136,12 +136,15 @@ fixes),
 turns out to have 50.6% duplicate consecutive frames - the real
 ceiling on this hardware is ~30 unique frames/sec regardless of what
 any tool's output file declares; decided to accept it rather than pad
-with duplicate frames that would carry no real motion data), and
+with duplicate frames that would carry no real motion data),
 [114](specs/114-shot-improvement-defer-processing-by-default.md)
 ("Vain nauhoitus" now defaults to checked - a real burst test measured
 a recording overlapping a previous one's background processing
 capturing 0 of ~330 expected frames on this 3.83GB machine, not just
-running slower).
+running slower), and
+[115](specs/115-shot-improvement-640x360-30fps.md)
+(capture at 640x360 @ 30fps, the camera's real ceiling; palm box
+halved to match).
 
 (Two earlier browser-based versions, specs 078 and 079, were built
 first and then replaced entirely — the original laptop this was built
