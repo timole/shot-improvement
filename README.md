@@ -153,10 +153,12 @@ halved to match),
 (async JPEG raw-frame writes; camera sweep shows audio capture halves
 fps to 30),
 [119](specs/119-shot-improvement-360p-small-fast-encodes.md)
-(360p default; smaller, faster mp4 encodes), and
+(360p default; smaller, faster mp4 encodes),
 [120](specs/120-shot-improvement-live-latest-recording-page.md)
 (website shows the latest recording live: fastest shot, countdowns,
-auto-playing clips).
+auto-playing clips), and
+[121](specs/121-shot-improvement-gui-shots-in-left-column.md)
+(GUI: shots list moved to the left column, recordings list 6 rows).
 
 (Two earlier browser-based versions, specs 078 and 079, were built
 first and then replaced entirely — the original laptop this was built

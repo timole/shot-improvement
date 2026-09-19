@@ -48,6 +48,8 @@ logger = get_logger("gui")
 # do on every single displayed frame (live preview, played frame, or a
 # single stepped frame alike).
 DISPLAY_SIZE = (640, 360)
+# Visible rows in the recordings list (the rest scroll).
+RECORDINGS_LIST_ROWS = 6
 DEFAULT_DURATION_S = 10
 PREVIEW_POLL_MS = 10  # self-paced anyway - actual cadence follows the work each tick does
 # Spec 091: a 3-2-1 countdown before capture actually starts, one
@@ -162,7 +164,7 @@ class App:
 
         self._build_record_row(self.left_frame)
         self._build_playback_controls(self.left_frame, self.center_frame)
-        self._build_shots_list(self.center_frame)
+        self._build_shots_list(self.left_frame)
 
         self.status_var = tk.StringVar(value="Käynnistetään kameraa…")
         self.status_label = ttk.Label(self.left_frame, textvariable=self.status_var)
@@ -360,12 +362,12 @@ class App:
         ).pack(side="left", padx=(6, 0))
 
     def _build_list(self, root: tk.Tk) -> None:
-        list_frame = ttk.Frame(root)
+        list_frame = self.list_frame = ttk.Frame(root)
         list_frame.pack(fill="both", expand=True, padx=8, pady=(0, 4))
         ttk.Label(list_frame, text="Tallenteet (kaksoisnapsauta toistaaksesi):").pack(anchor="w")
         inner = ttk.Frame(list_frame)
         inner.pack(fill="both", expand=True)
-        self.tree = ttk.Treeview(inner, columns=("created",), show="tree headings", height=8, selectmode="browse")
+        self.tree = ttk.Treeview(inner, columns=("created",), show="tree headings", height=RECORDINGS_LIST_ROWS, selectmode="browse")
         self.tree.heading("#0", text="Nimi")
         self.tree.heading("created", text="Luotu")
         self.tree.column("#0", width=300, anchor="w")
@@ -384,9 +386,8 @@ class App:
     def _build_shots_list(self, timeline_root: tk.Tk) -> None:
         # Spec 106: hidden (not packed) until a recording produces at
         # least one detected shot - see _on_shots_ready. Lives in the
-        # center column, under the video preview ("The list is below
-        # the video preview"), same placement idea as
-        # playback's timeline_frame.
+        # left column, above the recordings list (the video preview
+        # stays in the right/center column).
         self.shots_frame = ttk.Frame(timeline_root)
         ttk.Label(self.shots_frame, text="Laukaukset:").pack(anchor="w", padx=8)
 
@@ -772,7 +773,8 @@ class App:
             speed_label = f"{round(shot.speed_kmh)} km/h" if shot.speed_kmh is not None else "—"
             self.shots_tree.insert("", "end", iid=str(shot.index - 1), text=f"Laukaus {shot.index}", values=(speed_label,))
         self._mode = "shots"
-        self.shots_frame.pack(fill="both", expand=True)
+        # Left column, just above the recordings list.
+        self.shots_frame.pack(fill="x", before=self.list_frame)
         self.shots_tree.selection_set("0")
 
     def on_shot_selected(self, _event=None) -> None:
