@@ -144,7 +144,9 @@ capturing 0 of ~330 expected frames on this 3.83GB machine, not just
 running slower), and
 [115](specs/115-shot-improvement-640x360-30fps.md)
 (capture at 640x360 @ 30fps, the camera's real ceiling; palm box
-halved to match).
+halved to match),
+[116](specs/116-shot-improvement-raw-playback-native-size.md)
+(raw shot playback shown at native frame size, not stretched).
 
 (Two earlier browser-based versions, specs 078 and 079, were built
 first and then replaced entirely — the original laptop this was built

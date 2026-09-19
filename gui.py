@@ -841,6 +841,9 @@ class App:
     def _raw_playback_tick(self, paths: list[Path], times: list[float]) -> None:
         frame = cv2.imread(str(paths[self._raw_frame_pos]))
         if frame is not None:
+            # Raw frames have no spectrogram strip: show at native size
+            # (the shot image's taller size is restored on selection).
+            self._display_size = (frame.shape[1], frame.shape[0])
             self._show_frame(frame)
         if self._raw_frame_pos >= len(paths) - 1:
             self._raw_playing = False
