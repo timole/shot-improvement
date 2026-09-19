@@ -211,14 +211,18 @@ pip install -r requirements.txt
 ## Run
 
 GUI (live annotated preview, record button, recordings list with
-play/delete):
+play/delete). From the repo root, in a Windows terminal (PowerShell or
+cmd):
 
 ```
+cd "C:\Users\Timo Lehtonen\Documents\Projektit\shot-improvement"
 venv\Scripts\python gui.py
 ```
 
-Check **"Vain nauhoitus (käsittele myöhemmin)"** (spec 093) before
-recording to skip all post-capture processing (pose annotation,
+Cloud sync needs an active `az login` session (Azure only, spec 123).
+
+**"Vain nauhoitus (käsittele myöhemmin)"** (spec 093) is checked by
+default (spec 114); it skips all post-capture processing (pose annotation,
 spectrogram, ffmpeg encoding) - useful when the machine is too slow to
 both process an older clip and capture a new one at the same time.
 Raw frames are saved to `pending/` (gitignored) instead; click
