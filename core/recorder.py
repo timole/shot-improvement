@@ -85,7 +85,7 @@ FRAME_HEIGHT = 480
 # Requested as a ceiling when opening a camera - cv2/DirectShow negotiates
 # down to whatever the device actually supports; read back afterward
 # (cap.get(cv2.CAP_PROP_FPS)) for the real value, never assumed.
-REQUESTED_FPS_CEILING = 60.0  # spec 117: as OBS requests; negotiated value is read back
+REQUESTED_FPS_CEILING = 30.0
 # Spec 086 found real captured fps stuck around 8-9fps and blamed this
 # machine's CPU. That was wrong on two counts, both found and fixed in
 # spec 088: (1) PREFERRED_VIDEO_LABEL="logitech" never actually matched
@@ -149,7 +149,10 @@ FIXED_FOCUS = 0
 # inference itself (~57ms/frame), and this app is throughput-bound on
 # a weak CPU, so it's not worth paying for compression nothing else
 # ever needs (the final .mp4 is still properly h264-compressed).
-FRAME_FILE_EXTENSION = "bmp"
+# Spec 118: now JPEG (q95) - at 1280x720 a 2.7MB BMP per frame made disk
+# writes stall for 0.4-2s at a time on this machine; a ~200KB JPEG does not.
+FRAME_FILE_EXTENSION = "jpg"
+RAW_FRAME_JPEG_QUALITY = 95
 
 RECORDINGS_DIR = Path(__file__).resolve().parent.parent / "recordings"
 

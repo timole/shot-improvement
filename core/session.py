@@ -13,6 +13,7 @@ streaming frames to disk while a recording is in progress.
 
 from __future__ import annotations
 
+import queue
 import tempfile
 import threading
 import time
@@ -33,6 +34,7 @@ from .pose import PoseDetector, draw_palm_boxes
 from .profiling import Profiler
 from .recorder import (
     FRAME_FILE_EXTENSION,
+    RAW_FRAME_JPEG_QUALITY,
     FRAME_HEIGHT,
     FRAME_WIDTH,
     SAMPLE_RATE,
@@ -95,6 +97,44 @@ class ShotSource:
     frame_times: list[float]
 
 
+class FrameWriter:
+    """Spec 118: writes raw frames on background threads so a slow disk
+    write (measured stalls of 0.4-2s per write on this machine's disk
+    at 1280x720, which capped real capture at 9-17fps while the camera
+    itself delivered 60) never blocks the camera read loop. Frames are
+    JPEG-encoded (~200KB, vs 2.7MB BMP) so the in-memory queue stays
+    small even through a multi-second disk stall."""
+
+    WORKERS = 2
+
+    def __init__(self) -> None:
+        self._queue: queue.Queue = queue.Queue()
+        self._threads = [
+            threading.Thread(target=self._run, name="shot-improvement-frame-writer", daemon=True)
+            for _ in range(self.WORKERS)
+        ]
+        for t in self._threads:
+            t.start()
+
+    def submit(self, path: Path, frame: np.ndarray) -> None:
+        # frame is not reused by cv2's read() (each read allocates), so
+        # no copy is needed.
+        self._queue.put((path, frame))
+
+    def _run(self) -> None:
+        while True:
+            path, frame = self._queue.get()
+            try:
+                cv2.imwrite(str(path), frame, [cv2.IMWRITE_JPEG_QUALITY, RAW_FRAME_JPEG_QUALITY])
+            except Exception:
+                logger.warning("FrameWriter: failed writing %s", path, exc_info=True)
+            finally:
+                self._queue.task_done()
+
+    def join(self) -> None:
+        self._queue.join()
+
+
 class LiveSession:
     def __init__(self) -> None:
         self.video_index, self.video_name = pick_video_device()
@@ -108,6 +148,7 @@ class LiveSession:
         self.detector = PoseDetector()
         self._session_start = time.monotonic()
 
+        self._frame_writer = FrameWriter()
         self._recording = False
         self._record_duration = 0.0
         self._record_start = 0.0
@@ -418,7 +459,9 @@ class LiveSession:
             # the same deferred inference - boxes reappear once the
             # clip is loaded back for playback, on the annotated file.
             with self._profiler.accum("capture:imwrite"):
-                cv2.imwrite(str(self._raw_dir / f"frame_{self._record_frame_count:06d}.{FRAME_FILE_EXTENSION}"), frame)
+                self._frame_writer.submit(
+                    self._raw_dir / f"frame_{self._record_frame_count:06d}.{FRAME_FILE_EXTENSION}", frame,
+                )
             self._frame_times.append(time.monotonic() - self._record_start)
             self._record_frame_count += 1
             if time.monotonic() - self._record_start >= self._record_duration:
@@ -487,6 +530,7 @@ class LiveSession:
         annotated, all on a background thread. See
         _finish_deferred_recording for the "Vain nauhoitus" (spec 093)
         alternative."""
+        writer = self._frame_writer
         tmp_dir = self._tmp_dir
         tmp_dir_path = self._tmp_dir_path
         raw_dir, annotated_dir, out_dir = self._raw_dir, self._annotated_dir, self._out_dir
@@ -507,6 +551,7 @@ class LiveSession:
         def worker() -> None:
             lower_current_thread_priority()
             sd.wait()
+            writer.join()
             result: Optional[RecordingResult] = None
             try:
                 if frame_count == 0:
@@ -619,6 +664,7 @@ class LiveSession:
         raw frames nearest each shot, so they're cheap enough to keep
         this mode "fluent" while still giving the same immediate shot
         browsing as a normal recording. No mp4 is written either way."""
+        writer = self._frame_writer
         pending_dir = self._pending_capture_dir
         raw_dir = self._raw_dir
         video_name, audio_name = self.video_name, self.audio_name
@@ -633,6 +679,7 @@ class LiveSession:
         def worker() -> None:
             lower_current_thread_priority()
             sd.wait()
+            writer.join()
             ok = False
             try:
                 if frame_count == 0:
