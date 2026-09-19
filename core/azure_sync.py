@@ -1,12 +1,10 @@
 """Azure Blob Storage backend for core.cloud_sync (spec 095) - the data
 store behind the new Azure-hosted gallery at shot.timolehtonen.tech.
-Implements core.cloud_sync.Backend the same shape GcsBackend does, so
-SyncWorker can drive both at once (dual-write during the transition -
-see specs 094/095's "why").
+Implements core.cloud_sync.Backend, which SyncWorker drives (spec 123:
+the only backend - Google Cloud Storage was removed).
 
 Auth: `DefaultAzureCredential` (package azure-identity), which on this
-laptop picks up an `az login` session automatically - same UX as GCS's
-`gcloud auth application-default login`, no long-lived secret to store
+laptop picks up an `az login` session automatically - no long-lived secret to store
 locally. Needs the "Storage Blob Data Contributor" role granted to the
 signed-in account on the storage account (see specs/095's runbook) -
 without it every call 403s with AuthorizationPermissionMismatch, which

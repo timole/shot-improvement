@@ -1,5 +1,5 @@
 """Storage-agnostic preview-image generation (spec 094, split out spec
-095 so both core.cloud_sync (GCS) and core.azure_sync (Azure Blob) can
+095 so both core.cloud_sync and core.azure_sync can
 share it without duplicating the ffmpeg logic or importing each
 other's private functions).
 

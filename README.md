@@ -19,9 +19,9 @@ sent anywhere until the finished clip is uploaded.
   gets a spectrogram + a claps/speed band under the video, and a plain
   snapshot JPEG per detected shot with the speed burned in (spec 099).
 - **Sync to the cloud**: every clip (raw + annotated + a preview image)
-  uploads in the background to two independent backends - GCS and
-  Azure Blob Storage (spec 095) - each backing its own web gallery (see
-  "Two galleries" below).
+  uploads in the background to Azure Blob Storage (specs 095/123 - the
+  original Google Cloud Storage backend was removed), which backs the
+  web gallery (see "Web gallery" below).
 
 See "## Architecture" below for the edge/cloud shape of this, and
 `specs/` for the full build history (every increment, in order, with
@@ -158,9 +158,11 @@ fps to 30),
 (website shows the latest recording live: fastest shot, countdowns,
 auto-playing clips),
 [121](specs/121-shot-improvement-gui-shots-in-left-column.md)
-(GUI: shots list moved to the left column, recordings list 6 rows), and
+(GUI: shots list moved to the left column, recordings list 6 rows),
 [122](specs/122-shot-improvement-delete-temp-files.md)
-(per-recording temp folders are deleted again).
+(per-recording temp folders are deleted again), and
+[123](specs/123-shot-improvement-remove-gcp-storage.md)
+(Google Cloud Storage removed; Azure is the only backend).
 
 (Two earlier browser-based versions, specs 078 and 079, were built
 first and then replaced entirely — the original laptop this was built
@@ -184,8 +186,8 @@ what that move changed.
 Shows this as an edge/cloud split: capture (camera + microphone) and
 all processing - raw storage, on-device pose annotation - stay on the
 laptop ("Edge"); only the finished clip crosses to the cloud, where it
-lands in blob storage (dual-written to both GCS and Azure - see "Two
-galleries" below for what reads it there). Editable source:
+lands in Azure Blob Storage (see "Web gallery" below for what reads it
+there). Editable source:
 [docs/architecture.drawio](docs/architecture.drawio) - open it with
 the [draw.io desktop app](https://github.com/jgraph/drawio-desktop/releases)
 or at [app.diagrams.net](https://app.diagrams.net), edit, save, then
@@ -255,52 +257,25 @@ operation breakdown, and write the same data to
 venv\Scripts\pytest tests\
 ```
 
-## Two galleries (specs 087/094/095, both live)
+## Web gallery (specs 087/094/095/123)
 
-`core/cloud_sync.py` dual-writes every clip (raw + annotated + a JPEG
-preview per video, spec 094) to **two** cloud backends now (spec 095):
-a private GCS bucket and Azure Blob Storage. Two independent, gated
-gallery frontends read from them:
+`core/cloud_sync.py` uploads every clip (raw + annotated + a JPEG
+preview per video, spec 094) to Azure Blob Storage - the only cloud
+backend (spec 123 removed the original Google Cloud Storage one).
+**`https://shot.timolehtonen.tech`** (spec 095) reads it: Azure
+Container Apps, server-side code is `server/` in this repo, serving
+`web/{index.html,app.js}` directly (top-level `/api/...` paths).
+Redeploy with `az acr build --registry shotimprovementacr --image
+shot-improvement-server:<tag> --file server/Dockerfile --platform
+linux/amd64 .` then `az containerapp update -n shot-improvement-server
+-g shot-improvement --image
+shotimprovementacr.azurecr.io/shot-improvement-server:<tag>`.
 
-- **`https://ai.timolehtonen.tech/shot-improvement`** (spec 087) -
-  GCP/Cloud Run, reads the GCS bucket. Server-side code lives in the
-  `ai-timolehtonen-tech` repo (`server/main.py` +
-  `server/shot_improvement_videos.py` + `server/valkoapila_auth.py`),
-  **not** this one - **correction to earlier notes in this file**:
-  that code was NOT actually removed when this repo split out ("Spec
-  078: restore shot-improvement web gallery hosting" put it back, in
-  that repo's own numbering) - it's live and in active use. It serves
-  its own copy of the frontend from
-  `experiments/shot-improvement/web/` in that repo - a **separate**
-  copy from `web/` here, using a `/shot-improvement`-prefixed path
-  scheme, since it shares that server with other, unrelated features.
-  A change there needs a `gcloud builds submit --config
-  deploy/gcp/cloudbuild.yaml` (from that repo's root) to reach the
-  live site.
-- **`https://shot.timolehtonen.tech`** (spec 095) - Azure Container
-  Apps, reads Azure Blob Storage. Server-side code is `server/` **in
-  this repo**, serving `web/{index.html,app.js}` **in this repo**
-  directly (top-level `/api/...` paths, no prefix - nothing else
-  shares this domain). Redeploy with `az acr build --registry
-  shotimprovementacr --image shot-improvement-server:<tag> --file
-  server/Dockerfile --platform linux/amd64 .` then `az containerapp
-  update -n shot-improvement-server -g shot-improvement --image
-  shotimprovementacr.azurecr.io/shot-improvement-server:<tag>`.
-
-**`web/` in this repo is the Azure gallery's frontend, not the GCP
-one** - the two frontends are deliberately separate copies with
-different path schemes now, not meant to be kept identical.
-
-### GCP gallery status
-
-Set up during spec 087, still live in the `wide-exchanger-463707-c6`
-GCP project:
-
-- GCS bucket `wide-exchanger-463707-c6-shot-improvement`
-  (europe-north1, private, uniform bucket-level access).
-- OAuth 2.0 Client ID (shared with an unrelated `ai-timolehtonen-tech`
-  feature, Valkoapila) and a `SHOT_IMPROVEMENT_SESSION_SECRET` in
-  Secret Manager, both read by the live server.
+The older `ai.timolehtonen.tech/shot-improvement` gallery (GCP/Cloud
+Run, in the separate `ai-timolehtonen-tech` repo) is no longer fed by
+this app; the GCS bucket `wide-exchanger-463707-c6-shot-improvement`
+still exists in GCP but nothing here reads or writes it - retire it
+from that side when convenient.
 
 ### Azure gallery status
 

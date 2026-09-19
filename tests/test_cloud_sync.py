@@ -62,7 +62,7 @@ def test_local_video_names_includes_both_raw_and_annotated(tmp_path: Path) -> No
 
 class FakeBackend:
     """Test double implementing core.cloud_sync.Backend, standing in for
-    both GcsBackend and core.azure_sync.AzureBlobBackend."""
+    core.azure_sync.AzureBlobBackend."""
 
     def __init__(self, name: str, fail_upload: bool = False, fail_delete: bool = False) -> None:
         self.name = name

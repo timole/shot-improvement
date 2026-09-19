@@ -194,15 +194,12 @@ class App:
         self.refresh_pending()
 
         # Spec 087/094/095: uploads new clips (raw+annotated+preview) to
-        # every configured cloud backend and deletes ones removed
-        # locally. Runs on its own background thread (see
-        # cloud_sync.SyncWorker) - starting it never blocks camera
-        # startup below. Dual-write during the ai.timolehtonen.tech ->
-        # shot.timolehtonen.tech transition (spec 095) - GCS backs the
-        # existing gallery, Azure Blob backs the new one; both stay in
-        # sync from one SyncWorker until GCS is retired later.
+        # Azure Blob Storage and deletes ones removed locally (spec 123:
+        # Azure is the only backend). Runs on its own background thread
+        # (see cloud_sync.SyncWorker) - starting it never blocks camera
+        # startup below.
         self._sync_worker = cloud_sync.SyncWorker(
-            backends=[cloud_sync.GcsBackend(), azure_sync.AzureBlobBackend()],
+            backends=[azure_sync.AzureBlobBackend()],
             dispatch=lambda fn: self.root.after(0, fn),
         )
         self._sync_worker.start_reconcile(on_done=self._on_sync_reconciled)

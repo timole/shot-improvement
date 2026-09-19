@@ -5,17 +5,16 @@ pair, plus a JPEG preview per video - right after it's recorded, and
 deletes the cloud copy when a clip is deleted locally, keeping every
 configured storage backend in sync with this machine's own recordings.
 
-Spec 095: this module is now backend-agnostic - `Backend` is a small
+Spec 095: this module is backend-agnostic - `Backend` is a small
 structural protocol (`list_remote_names`/`upload_video`/
-`upload_preview`/`delete`) that `GcsBackend` (below) implements against
-the private `wide-exchanger-463707-c6-shot-improvement` GCS bucket, and
-`core.azure_sync.AzureBlobBackend` implements the same way against
-Azure Blob Storage - the new Azure-hosted gallery's data store. A
+`upload_preview`/`delete`) that `core.azure_sync.AzureBlobBackend`
+implements against Azure Blob Storage, the gallery's data store. A
 caller (gui.py) passes whichever backends it wants active to
-`SyncWorker`; everything else in this file - the queue, the
-background thread, the tombstone file, `plan_sync()`, preview
-generation - is shared, unchanged in spirit from the single-backend
-version, and runs once per backend rather than once total.
+`SyncWorker`; the queue, background thread, tombstone file,
+`plan_sync()` and preview generation are shared and run once per
+backend. Spec 123 removed the original Google Cloud Storage backend:
+Azure is the only backend now (the protocol is kept, small and useful
+for tests).
 
 Delete-sync is driven by recorded intent (a small local tombstone
 file), never by "absent locally therefore delete remotely": a name
@@ -49,7 +48,6 @@ from .video_preview import generate_preview, preview_name
 
 logger = get_logger("cloud_sync")
 
-BUCKET = "wide-exchanger-463707-c6-shot-improvement"
 # Spec 094: both members of a recording sync now - the plain
 # "shot-improvement-<timestamp>.mp4" raw clip and its "...-annotated.mp4"
 # pair, so one glob covering both is what _local_video_names() actually
@@ -60,11 +58,10 @@ BUCKET = "wide-exchanger-463707-c6-shot-improvement"
 ALL_VIDEOS_GLOB = "shot-improvement-*.mp4"
 ANNOTATED_GLOB = "*-annotated.mp4"
 
-# GCS resumable-upload chunks must be a multiple of 256 KiB; this is
-# also the minimum, chosen deliberately so a typical clip (a few
-# hundred KB to a couple MB, per core.recorder) uploads in several
-# chunks rather than one - the point of chunking here is on_progress
-# granularity (spec 090), not upload efficiency for its own sake.
+# Upload chunk size, chosen so a typical clip (a few hundred KB to a
+# couple MB, per core.recorder) uploads in several chunks rather than
+# one - the point of chunking here is on_progress granularity (spec
+# 090), not upload efficiency for its own sake.
 UPLOAD_CHUNK_SIZE = 256 * 1024
 
 # Beside recordings/, not inside it - RECORDINGS_DIR is globbed for
@@ -74,8 +71,8 @@ TOMBSTONES_PATH = RECORDINGS_DIR.parent / "cloud_sync_tombstones.json"
 
 
 class Backend(Protocol):
-    """Structural contract every storage backend implements - GcsBackend
-    below, core.azure_sync.AzureBlobBackend the same shape. `name` is
+    """Structural contract every storage backend implements -
+    core.azure_sync.AzureBlobBackend today. `name` is
     used only for logging. Every method operates on VIDEO names/paths;
     each backend owns its own preview naming/storage internally
     (`upload_preview`/`delete` both take care of the paired preview
@@ -87,72 +84,6 @@ class Backend(Protocol):
     def upload_video(self, path: Path, on_progress: Optional[Callable[[int, int], None]]) -> None: ...
     def upload_preview(self, jpg_path: Path, blob_name: str) -> None: ...
     def delete(self, name: str) -> None: ...
-
-
-class GcsBackend:
-    """The original backend (spec 087/090/094), now behind the Backend
-    protocol. Lazy client, same pattern as before - the app boots
-    without credentials, and errors only surface on first use."""
-
-    name = "gcs"
-
-    def __init__(self, bucket_name: str = BUCKET) -> None:
-        self._bucket_name = bucket_name
-        self._client = None
-
-    def _client_obj(self):
-        if self._client is None:
-            from google.cloud import storage
-
-            self._client = storage.Client()
-        return self._client
-
-    def _bucket(self):
-        return self._client_obj().bucket(self._bucket_name)
-
-    def list_remote_names(self) -> set[str]:
-        # Filtered to videos only - the bucket also holds each video's
-        # preview .jpg (spec 094), which must never be mistaken for a
-        # video a reconcile pass itself needs to upload/delete.
-        return {blob.name for blob in self._bucket().list_blobs() if blob.name.endswith(".mp4")}
-
-    def upload_video(self, path: Path, on_progress: Optional[Callable[[int, int], None]]) -> None:
-        blob = self._bucket().blob(path.name)
-        if on_progress is None:
-            blob.upload_from_filename(str(path), content_type="video/mp4")
-            return
-        total = path.stat().st_size
-        on_progress(0, total)
-        with open(path, "rb") as stream:
-            # Private API (no public equivalent exposes a resumable
-            # upload's own in-progress ResumableUpload/transport pair) -
-            # this is exactly what Blob.upload_from_filename does
-            # internally; reimplementing the loop ourselves is the only
-            # way to observe bytes_uploaded between chunks.
-            resumable_upload, transport = blob._initiate_resumable_upload(
-                client=self._client_obj(),
-                stream=stream,
-                content_type="video/mp4",
-                size=total,
-                num_retries=None,
-                chunk_size=UPLOAD_CHUNK_SIZE,
-            )
-            while not resumable_upload.finished:
-                resumable_upload.transmit_next_chunk(transport)
-                on_progress(resumable_upload.bytes_uploaded, total)
-
-    def upload_preview(self, jpg_path: Path, blob_name: str) -> None:
-        self._bucket().blob(blob_name).upload_from_filename(str(jpg_path), content_type="image/jpeg")
-
-    def delete(self, name: str) -> None:
-        self._bucket().blob(name).delete()
-        try:
-            self._bucket().blob(preview_name(name)).delete()
-        except Exception:
-            # Not found is expected/benign if generation failed
-            # originally, or already deleted - don't let this break the
-            # video delete's own success signal.
-            logger.debug("GcsBackend.delete: preview for %s not found or already gone", name, exc_info=True)
 
 
 def plan_sync(local_names: set[str], remote_names: set[str], tombstones: set[str]) -> tuple[set[str], set[str]]:
@@ -206,9 +137,8 @@ def upload(path: Path, backends: Sequence[Backend], on_progress: Optional[Callab
     per backend or only reflecting the first one's work.
 
     Resilient across backends: one backend failing doesn't stop the
-    others from being attempted (so e.g. a transient Azure outage
-    never blocks a GCS upload, keeping whichever gallery IS reachable
-    current) - but if any backend failed, the FIRST such exception is
+    others from being attempted (so a backend that's
+    transiently unreachable never blocks the others) - but if any backend failed, the FIRST such exception is
     still raised at the end, so callers (SyncWorker) see this action as
     failed and don't discard its tombstone / mark it done."""
     total = path.stat().st_size
@@ -278,7 +208,7 @@ class SyncWorker:
     upload.
 
     `backends` (spec 095): the storage backends to keep in sync - e.g.
-    `[GcsBackend(), azure_sync.AzureBlobBackend()]`. Every action runs
+    `[azure_sync.AzureBlobBackend()]`. Every action runs
     against all of them.
 
     `dispatch`, same convention as LiveSession.start_recording's
