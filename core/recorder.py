@@ -75,16 +75,17 @@ PREFERRED_VIDEO_LABEL = "c922"
 PREFERRED_MIC_LABEL = "c922"
 PREFERRED_SPEAKER_LABEL = "jabra"
 SAMPLE_RATE = 44100
-# Spec 115: 640x360 @ 30fps (was 1280x720 @ 60fps requested) - measured
-# real camera delivery is ~30 unique frames/sec at any resolution (spec
-# 113), and a smaller frame is much lighter on this 3.83GB machine's
-# memory/disk during capture and processing.
+# Spec 115/117: 640x480 (4:3), matching what OBS's default settings
+# captured from this camera (2026-09-19 12-27-46.mp4: 640x480, 60fps
+# container). Real camera delivery is ~30 unique frames/sec at any
+# resolution (spec 113), and a small frame is much lighter on this
+# 3.83GB machine's memory/disk during capture and processing.
 FRAME_WIDTH = 640
-FRAME_HEIGHT = 360
+FRAME_HEIGHT = 480
 # Requested as a ceiling when opening a camera - cv2/DirectShow negotiates
 # down to whatever the device actually supports; read back afterward
 # (cap.get(cv2.CAP_PROP_FPS)) for the real value, never assumed.
-REQUESTED_FPS_CEILING = 30.0
+REQUESTED_FPS_CEILING = 60.0  # spec 117: as OBS requests; negotiated value is read back
 # Spec 086 found real captured fps stuck around 8-9fps and blamed this
 # machine's CPU. That was wrong on two counts, both found and fixed in
 # spec 088: (1) PREFERRED_VIDEO_LABEL="logitech" never actually matched

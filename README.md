@@ -146,7 +146,9 @@ running slower), and
 (capture at 640x360 @ 30fps, the camera's real ceiling; palm box
 halved to match),
 [116](specs/116-shot-improvement-raw-playback-native-size.md)
-(raw shot playback shown at native frame size, not stretched).
+(raw shot playback shown at native frame size, not stretched), and
+[117](specs/117-shot-improvement-640x480-like-obs.md)
+(capture at 640x480 like OBS's defaults).
 
 (Two earlier browser-based versions, specs 078 and 079, were built
 first and then replaced entirely — the original laptop this was built
