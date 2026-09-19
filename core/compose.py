@@ -73,7 +73,7 @@ logger = get_logger("compose")
 # Spec 098: a claps/puck-speed annotation band below the spectrogram -
 # same 1280x1200 total composite height as before spec 098 (720 video +
 # 280 spectrogram, shrunk from 480 - + 200 here).
-CLAPS_BAND_HEIGHT = 200
+CLAPS_BAND_HEIGHT = 120  # spec 119: was 200, for the smaller 640x360 frame
 CLAPS_BAND_BG_BGR = (0, 0, 0)
 CLAP_TICK_COLOR_BGR = (255, 255, 255)
 CLAP_TICK_HEIGHT = 14

@@ -46,7 +46,7 @@ logger = get_logger("gui")
 # cv2.resize rather than the arbitrary-ratio PIL resize this used to
 # do on every single displayed frame (live preview, played frame, or a
 # single stepped frame alike).
-DISPLAY_SIZE = (640, 480)
+DISPLAY_SIZE = (640, 360)
 DEFAULT_DURATION_S = 10
 PREVIEW_POLL_MS = 10  # self-paced anyway - actual cadence follows the work each tick does
 # Spec 091: a 3-2-1 countdown before capture actually starts, one

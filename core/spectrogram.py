@@ -37,7 +37,7 @@ logger = get_logger("spectrogram")
 # (CLAPS_BAND_HEIGHT lives there, not here) - this is just this panel's
 # own height, shrunk from 480 in spec 098 to make room for the new band
 # beneath it, same 1280x1200 total either way.
-SPECTROGRAM_HEIGHT = 280
+SPECTROGRAM_HEIGHT = 160  # spec 119: was 280, for the smaller 640x360 frame
 FFT_WINDOW = 512
 FFT_HOP = 128
 DYNAMIC_RANGE_DB = 80.0

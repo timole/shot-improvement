@@ -151,7 +151,9 @@ halved to match),
 (capture at 640x480 like OBS's defaults), and
 [118](specs/118-shot-improvement-async-jpeg-frame-writes.md)
 (async JPEG raw-frame writes; camera sweep shows audio capture halves
-fps to 30).
+fps to 30), and
+[119](specs/119-shot-improvement-360p-small-fast-encodes.md)
+(360p default; smaller, faster mp4 encodes).
 
 (Two earlier browser-based versions, specs 078 and 079, were built
 first and then replaced entirely — the original laptop this was built

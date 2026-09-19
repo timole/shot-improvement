@@ -81,7 +81,7 @@ SAMPLE_RATE = 44100
 # resolution (spec 113), and a small frame is much lighter on this
 # 3.83GB machine's memory/disk during capture and processing.
 FRAME_WIDTH = 640
-FRAME_HEIGHT = 480
+FRAME_HEIGHT = 360
 # Requested as a ceiling when opening a camera - cv2/DirectShow negotiates
 # down to whatever the device actually supports; read back afterward
 # (cap.get(cv2.CAP_PROP_FPS)) for the real value, never assumed.
@@ -153,6 +153,13 @@ FIXED_FOCUS = 0
 # writes stall for 0.4-2s at a time on this machine; a ~200KB JPEG does not.
 FRAME_FILE_EXTENSION = "jpg"
 RAW_FRAME_JPEG_QUALITY = 95
+# Spec 119: small, fast-to-encode mp4s - these go over a mobile phone
+# network, and quality matters far less than encode speed and size for
+# this app. veryfast is several times quicker than libx264's default
+# (medium); crf 32 (default 23) is a much smaller file; mono 48k AAC is
+# plenty for a clap/shot-detection soundtrack.
+ENCODE_VIDEO_QUALITY_ARGS = ("-preset", "veryfast", "-crf", "32")
+ENCODE_AUDIO_QUALITY_ARGS = ("-b:a", "48k", "-ac", "1")
 
 RECORDINGS_DIR = Path(__file__).resolve().parent.parent / "recordings"
 
@@ -366,9 +373,12 @@ def encode_frames_with_audio(
         *video_input_args,
         "-i", str(audio_path),
         "-c:v", "libx264",
+        *ENCODE_VIDEO_QUALITY_ARGS,
         "-pix_fmt", "yuv420p",
         *video_output_args,
         "-c:a", "aac",
+        *ENCODE_AUDIO_QUALITY_ARGS,
+        "-movflags", "+faststart",
         "-shortest",
         "-nostats",
         "-progress", "pipe:1",
