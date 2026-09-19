@@ -207,6 +207,7 @@ class App:
         # Spec 120: live status for the website (countdown, fastest shot).
         self._status = StatusPublisher()
         self._current_rec_id = ""
+        self._recording_deferred = False
 
         self.root.after(0, self._init_session)
 
@@ -634,6 +635,7 @@ class App:
             self.root.after(1000, lambda: self._run_countdown(duration_s, seconds_left - 1))
             return
         self._counting_down = False
+        self._recording_deferred = self.defer_processing_var.get()
         self.status_var.set("Tallennus käynnistyi")
         self.session.start_recording(
             duration_s, RECORDINGS_DIR, self._on_recording_done,
@@ -752,12 +754,12 @@ class App:
 
     def _on_capture_ended(self, rec_id: str) -> None:
         self._current_rec_id = rec_id
-        self._status.begin(rec_id)
+        self._status.begin(rec_id, deferred=self._recording_deferred)
 
     def _on_shots_ready(self, shots: list[ShotImage], source: ShotSource) -> None:
         speeds = [s.speed_kmh for s in shots if s.speed_kmh is not None]
         if self._current_rec_id:
-            self._status.update(self._current_rec_id, fastest_kmh=round(max(speeds)) if speeds else None)
+            self._status.update(self._current_rec_id, fastest_kmh=round(max(speeds)) if speeds else None, shots_checked=True)
         self._shots = shots
         self._shot_source = source
         self._shot_frame_cache = {}

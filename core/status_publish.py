@@ -49,12 +49,15 @@ class StatusPublisher:
         self._dirty = threading.Event()
         threading.Thread(target=self._run, name="shot-improvement-status", daemon=True).start()
 
-    def begin(self, rec_id: str) -> None:
-        """Capture just ended for recording `rec_id` (YYYYmmddHHMMSS)."""
+    def begin(self, rec_id: str, deferred: bool = False) -> None:
+        """Capture just ended for recording `rec_id` (YYYYmmddHHMMSS).
+        deferred ("Vain nauhoitus"): no clips will be produced until the
+        recording is processed later, so the page gets state "deferred"
+        (fastest shot only, no countdown)."""
         with self._lock:
             self._state = {
                 "id": rec_id,
-                "state": "processing",
+                "state": "deferred" if deferred else "processing",
                 "capture_ended_at": _now_iso(),
                 "raw_eta_s": RAW_ETA_S,
                 "annotated_eta_s": ANNOTATED_ETA_S,

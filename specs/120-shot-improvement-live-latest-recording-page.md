@@ -36,3 +36,11 @@
 ## Tests
 `server/tests` 47 passed (4 new), `tests` 112 passed; `web/app.js`
 compiles as JSX.
+
+## Follow-up: deferred recordings
+"Vain nauhoitus" is the GUI default, so the first version (which only
+published status for immediate-processing recordings) showed nothing on
+the page for the common case. Now every recording publishes: deferred
+ones get state `deferred` (fastest km/h shown, "video appears when the
+recording is processed in the app", no countdown). `shots_checked`
+distinguishes "still computing" from "no shots detected".

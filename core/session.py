@@ -508,8 +508,7 @@ class LiveSession:
         # not just hopeful GIL interleaving.
         self._recording = False
         self._encoding_count += 1
-        if not self._defer_processing:
-            self._on_capture_ended(self._timestamp)
+        self._on_capture_ended(self._timestamp)
         elapsed_s = time.monotonic() - self._record_start
         frame_count = self._record_frame_count
         frame_times = self._frame_times

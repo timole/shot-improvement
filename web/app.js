@@ -132,7 +132,7 @@ function LatestPanel({ status, serverOffsetMs, autoPlay }) {
       <p className="display-6 mb-2">
         Nopein laukaus: <strong>{status.fastest_kmh} km/h</strong>
       </p>
-    ) : status.state === "processing" ? (
+    ) : !status.shots_checked && (status.state === "processing" || status.state === "deferred") ? (
       <p className="text-muted mb-2">Laukauksen nopeutta lasketaan…</p>
     ) : (
       <p className="text-muted mb-2">Laukauksia ei tunnistettu.</p>
@@ -141,7 +141,14 @@ function LatestPanel({ status, serverOffsetMs, autoPlay }) {
   let heading = "Uusin tallenne";
   let video = null;
   let countdowns = null;
-  if (status.state === "processing") {
+  if (status.state === "deferred") {
+    heading = "Uusi tallenne tallennettu";
+    countdowns = (
+      <p className="text-muted mb-1">
+        Videota ei ole vielä käsitelty – se ilmestyy tähän, kun tallenne käsitellään sovelluksessa.
+      </p>
+    );
+  } else if (status.state === "processing") {
     heading = "Uusi tallenne käsittelyssä";
     countdowns = (
       <>
@@ -163,7 +170,7 @@ function LatestPanel({ status, serverOffsetMs, autoPlay }) {
     <div className="card shadow-sm mb-4">
       <div className="card-body">
         <div className="d-flex align-items-center mb-2">
-          {status.state !== "done" && (
+          {status.state !== "done" && status.state !== "deferred" && (
             <div className="spinner-border spinner-border-sm text-success me-2" role="status"></div>
           )}
           <h2 className="h5 mb-0">{heading}</h2>
