@@ -317,3 +317,39 @@ def test_redirect_uri_constant_matches_the_registered_app() -> None:
     # "redirect_uri_mismatch" error, not a local test failure, so it's
     # worth pinning explicitly.
     assert REDIRECT_URI == "https://shot.timolehtonen.tech/api/login/callback"
+
+
+# --- GET /api/status (spec 120) --------------------------------------------
+
+
+def test_status_requires_a_session() -> None:
+    assert client.get("/api/status").status_code == 401
+
+
+def test_status_returns_the_laptops_status_and_server_time(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = {"id": "20260919154426", "state": "processing", "fastest_kmh": 87}
+    monkeypatch.setattr("server.main.blob_videos.read_status", lambda: fake)
+    resp = client.get("/api/status", cookies={SESSION_COOKIE_NAME: _session_cookie()})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == fake
+    assert "server_now" in body
+
+
+def test_status_is_null_when_nothing_published_or_azure_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    def boom() -> None:
+        raise RuntimeError("azure down")
+
+    monkeypatch.setattr("server.main.blob_videos.read_status", boom)
+    resp = client.get("/api/status", cookies={SESSION_COOKIE_NAME: _session_cookie()})
+    assert resp.status_code == 200
+    assert resp.json()["status"] is None
+
+
+def test_raw_clip_names_are_servable_but_not_listed() -> None:
+    from server import blob_videos
+
+    assert blob_videos.is_valid_video_name("shot-improvement-20260919154426.mp4")
+    assert blob_videos.is_valid_video_name("shot-improvement-20260919154426-annotated.mp4")
+    assert not blob_videos.is_valid_video_name("status/latest.json")
+    assert not blob_videos.is_valid_video_name("../shot-improvement-20260919154426.mp4")

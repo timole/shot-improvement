@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 import secrets as secrets_module
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -161,6 +162,24 @@ def videos_list(request: Request) -> dict:
     except Exception:
         logger.exception("Failed to list videos")
         raise HTTPException(status_code=503, detail="Videoiden listaus epäonnistui.")
+
+
+@app.get("/api/status")
+def status(request: Request) -> dict:
+    """Spec 120: the laptop's live recording status plus this server's
+    own clock (the page computes its countdown against it, so a browser
+    whose clock is off still counts down correctly)."""
+    if _session_email(request) is None:
+        raise HTTPException(status_code=401, detail="Kirjaudu sisään.")
+    try:
+        current = blob_videos.read_status()
+    except Exception:
+        logger.exception("Failed to read status")
+        current = None
+    return {
+        "status": current,
+        "server_now": datetime.now(timezone.utc).isoformat(),
+    }
 
 
 @app.get("/api/videos/{name}")

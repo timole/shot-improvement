@@ -36,6 +36,11 @@ CONTAINER = os.environ.get("AZURE_BLOB_CONTAINER", "clips")
 # GET /api/videos/{name} from ever reading an arbitrary blob name out
 # of the container.
 VIDEO_NAME_RE = re.compile(r"^shot-improvement-(\d{14})-annotated\.mp4$")
+# Spec 120: the raw clip is viewable too (the page shows it as soon as
+# it's uploaded, before the annotated one is ready) - servable by name,
+# but still not listed in list_videos().
+RAW_VIDEO_NAME_RE = re.compile(r"^shot-improvement-(\d{14})\.mp4$")
+STATUS_BLOB_NAME = "status/latest.json"
 PREVIEW_NAME_RE = re.compile(r"^shot-improvement-(\d{14})-annotated\.jpg$")
 
 # Container Apps' ephemeral storage is real disk (unlike Cloud Run's
@@ -63,7 +68,7 @@ def _container():
 
 
 def is_valid_video_name(name: str) -> bool:
-    return bool(VIDEO_NAME_RE.match(name))
+    return bool(VIDEO_NAME_RE.match(name) or RAW_VIDEO_NAME_RE.match(name))
 
 
 def is_valid_preview_name(name: str) -> bool:
@@ -126,3 +131,21 @@ def _evict_oldest() -> None:
         cached = sorted(_CACHE_DIR.glob(pattern), key=lambda p: p.stat().st_mtime, reverse=True)
         for stale in cached[keep:]:
             stale.unlink(missing_ok=True)
+
+
+def read_status() -> dict | None:
+    """The laptop's live status blob (core/status_publish.py), or None if
+    it hasn't been written yet / can't be parsed."""
+    import json
+
+    from azure.core.exceptions import ResourceNotFoundError
+
+    try:
+        data = _container().get_blob_client(STATUS_BLOB_NAME).download_blob().readall()
+    except ResourceNotFoundError:
+        return None
+    try:
+        status = json.loads(data)
+    except ValueError:
+        return None
+    return status if isinstance(status, dict) else None

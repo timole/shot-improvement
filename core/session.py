@@ -280,6 +280,7 @@ class LiveSession:
         defer_processing: bool = False,
         on_deferred_saved: Callable[[bool], None] = lambda ok: None,
         on_shots_ready: Callable[[list[ShotImage], ShotSource], None] = lambda shots, source: None,
+        on_capture_ended: Callable[[str], None] = lambda timestamp: None,
     ) -> None:
         """dispatch, if given, is used to run on_done back on whatever
         thread called start_recording (e.g. Tkinter's root.after(0, fn))
@@ -339,6 +340,7 @@ class LiveSession:
         self._on_raw_ready = on_raw_ready
         self._on_deferred_saved = on_deferred_saved
         self._on_shots_ready = on_shots_ready
+        self._on_capture_ended = on_capture_ended
         self._defer_processing = defer_processing
         # A PoseDetector reused continuously across a long idle-preview
         # session (minutes of frames, possibly a prior recording too)
@@ -506,6 +508,8 @@ class LiveSession:
         # not just hopeful GIL interleaving.
         self._recording = False
         self._encoding_count += 1
+        if not self._defer_processing:
+            self._on_capture_ended(self._timestamp)
         elapsed_s = time.monotonic() - self._record_start
         frame_count = self._record_frame_count
         frame_times = self._frame_times

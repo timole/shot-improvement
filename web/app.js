@@ -12,7 +12,9 @@
 // step and no credential callback here at all; this component only
 // ever reads whoami/videos.
 
-const { useEffect, useState } = React;
+const { useEffect, useRef, useState } = React;
+
+const POLL_MS = 3000;
 
 function formatSize(bytes) {
   if (bytes == null) return "";
@@ -88,6 +90,103 @@ function VideoList({ videos }) {
   );
 }
 
+
+// Spec 120: the newest recording, live. The laptop publishes its stage
+// (processing -> raw_ready -> done) plus the fastest shot's km/h; this
+// counts down to when each clip should be viewable, measured against
+// the SERVER's clock (serverOffsetMs) so a wrong browser clock doesn't
+// skew it. Once a clip is uploaded it plays here automatically.
+function secondsLeft(status, etaKey, nowMs) {
+  const endedMs = Date.parse(status.capture_ended_at);
+  if (Number.isNaN(endedMs)) return null;
+  return Math.max(0, Math.ceil((endedMs + status[etaKey] * 1000 - nowMs) / 1000));
+}
+
+function Countdown({ label, seconds }) {
+  if (seconds === null) return null;
+  return (
+    <p className="mb-1">
+      {label}{" "}
+      {seconds > 0 ? (
+        <strong style={{ fontVariantNumeric: "tabular-nums" }}>noin {seconds} s</strong>
+      ) : (
+        <strong>hetki vielä…</strong>
+      )}
+    </p>
+  );
+}
+
+function LatestPanel({ status, serverOffsetMs, autoPlay }) {
+  const [nowMs, setNowMs] = useState(Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNowMs(Date.now()), 250);
+    return () => clearInterval(t);
+  }, []);
+  if (!status || !status.id) return null;
+
+  const serverNow = nowMs + serverOffsetMs;
+  const rawName = `shot-improvement-${status.id}.mp4`;
+  const annotatedName = `shot-improvement-${status.id}-annotated.mp4`;
+  const fastest =
+    status.fastest_kmh != null ? (
+      <p className="display-6 mb-2">
+        Nopein laukaus: <strong>{status.fastest_kmh} km/h</strong>
+      </p>
+    ) : status.state === "processing" ? (
+      <p className="text-muted mb-2">Laukauksen nopeutta lasketaan…</p>
+    ) : (
+      <p className="text-muted mb-2">Laukauksia ei tunnistettu.</p>
+    );
+
+  let heading = "Uusin tallenne";
+  let video = null;
+  let countdowns = null;
+  if (status.state === "processing") {
+    heading = "Uusi tallenne käsittelyssä";
+    countdowns = (
+      <>
+        <Countdown label="Video katsottavissa" seconds={secondsLeft(status, "raw_eta_s", serverNow)} />
+        <Countdown label="Merkitty video valmis" seconds={secondsLeft(status, "annotated_eta_s", serverNow)} />
+      </>
+    );
+  } else if (status.state === "raw_ready") {
+    heading = "Video katsottavissa – merkittyä videota käsitellään";
+    video = rawName;
+    countdowns = (
+      <Countdown label="Merkitty video valmis" seconds={secondsLeft(status, "annotated_eta_s", serverNow)} />
+    );
+  } else {
+    video = annotatedName;
+  }
+
+  return (
+    <div className="card shadow-sm mb-4">
+      <div className="card-body">
+        <div className="d-flex align-items-center mb-2">
+          {status.state !== "done" && (
+            <div className="spinner-border spinner-border-sm text-success me-2" role="status"></div>
+          )}
+          <h2 className="h5 mb-0">{heading}</h2>
+        </div>
+        {fastest}
+        {countdowns}
+        {video && (
+          <video
+            key={video}
+            className="w-100 bg-dark mt-2"
+            style={{ maxWidth: 720 }}
+            controls
+            muted
+            playsInline
+            autoPlay={autoPlay}
+            src={`/api/videos/${video}`}
+          ></video>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function App() {
   const [checking, setChecking] = useState(true);
   const [email, setEmail] = useState(null);
@@ -95,6 +194,11 @@ function App() {
     new URLSearchParams(window.location.search).get("login_error") ? "Kirjautuminen epäonnistui - yritä uudelleen." : ""
   );
   const [videos, setVideos] = useState(null);
+  const [status, setStatus] = useState(null);
+  const [serverOffsetMs, setServerOffsetMs] = useState(0);
+  // Autoplay only for a recording that appears (or changes stage) while
+  // the page is open - not for whatever was already there on load.
+  const initialKey = useRef(undefined);
 
   useEffect(() => {
     (async () => {
@@ -114,19 +218,41 @@ function App() {
 
   useEffect(() => {
     if (!email) return;
-    (async () => {
+    let cancelled = false;
+    async function poll() {
       try {
-        const resp = await fetch("/api/videos", { credentials: "same-origin" });
-        if (!resp.ok) {
+        const [vresp, sresp] = await Promise.all([
+          fetch("/api/videos", { credentials: "same-origin" }),
+          fetch("/api/status", { credentials: "same-origin" }),
+        ]);
+        if (cancelled) return;
+        if (vresp.ok) {
+          const body = await vresp.json();
+          // Keep the same array when nothing changed so the cards (and
+          // any video being watched) don't re-render every poll.
+          setVideos((prev) => (prev && JSON.stringify(prev) === JSON.stringify(body.videos) ? prev : body.videos));
+          setMessage("");
+        } else {
           setMessage("Videoiden lataus epäonnistui.");
-          return;
         }
-        const body = await resp.json();
-        setVideos(body.videos);
+        if (sresp.ok) {
+          const body = await sresp.json();
+          setServerOffsetMs(Date.parse(body.server_now) - Date.now());
+          if (initialKey.current === undefined) {
+            initialKey.current = body.status ? `${body.status.id}:${body.status.state}` : "";
+          }
+          setStatus((prev) => (prev && JSON.stringify(prev) === JSON.stringify(body.status) ? prev : body.status));
+        }
       } catch (err) {
-        setMessage("Videoiden lataus epäonnistui (verkkovirhe).");
+        if (!cancelled) setMessage("Videoiden lataus epäonnistui (verkkovirhe).");
       }
-    })();
+    }
+    poll();
+    const timer = setInterval(poll, POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
   }, [email]);
 
   if (checking) {
@@ -153,6 +279,11 @@ function App() {
         <span className="text-muted small">{email}</span>
       </div>
       {message && <div className="alert alert-warning py-2 small">{message}</div>}
+      <LatestPanel
+        status={status}
+        serverOffsetMs={serverOffsetMs}
+        autoPlay={!!status && `${status.id}:${status.state}` !== initialKey.current}
+      />
       {videos === null ? (
         <div className="spinner-border text-success" role="status">
           <span className="visually-hidden">Ladataan&hellip;</span>

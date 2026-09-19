@@ -24,6 +24,7 @@ import cv2
 from PIL import Image, ImageTk
 
 from core import azure_sync, cloud_sync, devices, pending
+from core.status_publish import StatusPublisher
 from core.compose import ShotImage, select_shot_frame_range
 from core.log_setup import get_logger, setup_logging
 from core.playback import SKIP_SECONDS, SPEED_OPTIONS, ClipPlayer, format_time
@@ -203,6 +204,9 @@ class App:
             dispatch=lambda fn: self.root.after(0, fn),
         )
         self._sync_worker.start_reconcile(on_done=self._on_sync_reconciled)
+        # Spec 120: live status for the website (countdown, fastest shot).
+        self._status = StatusPublisher()
+        self._current_rec_id = ""
 
         self.root.after(0, self._init_session)
 
@@ -639,6 +643,7 @@ class App:
             defer_processing=self.defer_processing_var.get(),
             on_deferred_saved=self._on_deferred_saved,
             on_shots_ready=self._on_shots_ready,
+            on_capture_ended=self._on_capture_ended,
         )
 
     @staticmethod
@@ -699,6 +704,7 @@ class App:
         # re-enabled it via _on_raw_ready well before this runs, and
         # pending-queue processing never disabled it in the first place
         # (it doesn't touch the camera).
+        rec_id = result.raw_path.stem.rsplit("-", 1)[-1]
         saved_msg = f"Tallennettu ({result.frame_count} kuvaa, {result.actual_fps:.1f} fps)."
         self._set_status_if_idle(f"{saved_msg} Synkronoidaan verkkoon…")
         self.tmp_dir_var.set(f"Väliaikaiskansio: {result.tmp_dir_path}" if result.tmp_dir_path else "")
@@ -717,6 +723,8 @@ class App:
                     self._set_status_if_idle(f"{saved_msg} Synkronointi epäonnistui ({label}): {exc}")
                 else:
                     self._set_status_if_idle(f"{saved_msg} Synkronoitu verkkoon ({label}).")
+                    # Spec 120: tell the website this clip is viewable.
+                    self._status.update(rec_id, state="raw_ready" if label == "raaka" else "done")
             return on_done
 
         # SyncWorker's queue is a single, strictly-ordered FIFO (one
@@ -742,7 +750,14 @@ class App:
     # for is visible immediately instead of after a slow background
     # encode.
 
+    def _on_capture_ended(self, rec_id: str) -> None:
+        self._current_rec_id = rec_id
+        self._status.begin(rec_id)
+
     def _on_shots_ready(self, shots: list[ShotImage], source: ShotSource) -> None:
+        speeds = [s.speed_kmh for s in shots if s.speed_kmh is not None]
+        if self._current_rec_id:
+            self._status.update(self._current_rec_id, fastest_kmh=round(max(speeds)) if speeds else None)
         self._shots = shots
         self._shot_source = source
         self._shot_frame_cache = {}

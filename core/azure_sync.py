@@ -83,6 +83,14 @@ class AzureBlobBackend:
                 progress_hook=progress_hook if on_progress is not None else None,
             )
 
+    def upload_bytes(self, name: str, data: bytes, content_type: str) -> None:
+        from azure.storage.blob import ContentSettings
+
+        self._container().upload_blob(
+            name=name, data=data, overwrite=True,
+            content_settings=ContentSettings(content_type=content_type, cache_control="no-store"),
+        )
+
     def upload_preview(self, jpg_path: Path, blob_name: str) -> None:
         from azure.storage.blob import ContentSettings
 
