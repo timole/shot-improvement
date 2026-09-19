@@ -70,7 +70,7 @@ SLOW_FRAME_WARN_THRESHOLD_S = 1.0
 # automatic cleanup - flip this back to False then (and revert
 # start_recording's mkdtemp() branch back to plain TemporaryDirectory()
 # if the manual-inspection path is no longer wanted at all).
-KEEP_TEMP_DIR_FOR_INSPECTION = True
+KEEP_TEMP_DIR_FOR_INSPECTION = False  # spec 122: user asked for temp files to be deleted (they filled the disk)
 
 
 @dataclass

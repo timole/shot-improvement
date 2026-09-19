@@ -156,9 +156,11 @@ fps to 30),
 (360p default; smaller, faster mp4 encodes),
 [120](specs/120-shot-improvement-live-latest-recording-page.md)
 (website shows the latest recording live: fastest shot, countdowns,
-auto-playing clips), and
+auto-playing clips),
 [121](specs/121-shot-improvement-gui-shots-in-left-column.md)
-(GUI: shots list moved to the left column, recordings list 6 rows).
+(GUI: shots list moved to the left column, recordings list 6 rows), and
+[122](specs/122-shot-improvement-delete-temp-files.md)
+(per-recording temp folders are deleted again).
 
 (Two earlier browser-based versions, specs 078 and 079, were built
 first and then replaced entirely — the original laptop this was built
