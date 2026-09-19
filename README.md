@@ -130,13 +130,18 @@ improvement, but real capture throughput still lands at a clean, exact
 30.0fps regardless of resolution or any other camera property tried;
 documented as a likely genuine ceiling of this camera's MJPG mode over
 DirectShow on this system, not something further property tuning
-fixes), and
+fixes),
 [113](specs/113-shot-improvement-30fps-is-the-real-ceiling.md)
 (confirms it: a user-supplied OBS reference file that reports 60fps
 turns out to have 50.6% duplicate consecutive frames - the real
 ceiling on this hardware is ~30 unique frames/sec regardless of what
 any tool's output file declares; decided to accept it rather than pad
-with duplicate frames that would carry no real motion data).
+with duplicate frames that would carry no real motion data), and
+[114](specs/114-shot-improvement-defer-processing-by-default.md)
+("Vain nauhoitus" now defaults to checked - a real burst test measured
+a recording overlapping a previous one's background processing
+capturing 0 of ~330 expected frames on this 3.83GB machine, not just
+running slower).
 
 (Two earlier browser-based versions, specs 078 and 079, were built
 first and then replaced entirely — the original laptop this was built

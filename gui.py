@@ -253,9 +253,17 @@ class App:
         # it runs, even with spec 091's own priority handling - this
         # checkbox lets the user skip that contention entirely: capture
         # only, nothing else, until "Käsittele odottavat" is clicked.
+        # Spec 114: defaults to checked - measured directly on this
+        # hardware (3.83GB RAM) that starting a new recording while a
+        # previous one's background annotation pass is still running
+        # isn't just slower, it can fail outright (one real test
+        # recording captured 0 of ~330 expected frames, every camera
+        # read failing for the full 10s, free memory measured as low as
+        # ~97MB during a 3-recording burst) - deferred processing avoids
+        # that contention entirely, so it's the safer default here.
         defer_row = ttk.Frame(root)
         defer_row.pack(pady=(0, 4))
-        self.defer_processing_var = tk.BooleanVar(value=False)
+        self.defer_processing_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(
             defer_row, text="Vain nauhoitus (käsittele myöhemmin)", variable=self.defer_processing_var,
         ).pack(side="left")
