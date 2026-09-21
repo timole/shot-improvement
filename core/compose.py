@@ -57,7 +57,7 @@ from typing import Callable, NamedTuple, Optional, Sequence
 import cv2
 import numpy as np
 
-from .claps import detect_claps, pair_claps, puck_speed_kmh
+from .claps import PUCK_TRAVEL_DISTANCE_M, detect_claps, pair_claps, puck_speed_kmh
 from .log_setup import get_logger
 from .pose import PalmBox, PoseDetector, draw_palm_boxes
 from .profiling import NULL_PROFILER, Profiler
@@ -139,7 +139,10 @@ def render_claps_band(width: int, height: int, claps: Sequence[float], duration_
     return band
 
 
-def draw_pair_annotations(spectrogram: np.ndarray, pairs: Sequence[tuple[float, float]], duration_s: float) -> None:
+def draw_pair_annotations(
+    spectrogram: np.ndarray, pairs: Sequence[tuple[float, float]], duration_s: float,
+    distance_m: float = PUCK_TRAVEL_DISTANCE_M,
+) -> None:
     """Draws each paired (shot_t, hit_t)'s travel-time line + speed
     directly onto the spectrogram image, in place - baked in once per
     clip (see module docstring), not redrawn per frame."""
@@ -151,7 +154,7 @@ def draw_pair_annotations(spectrogram: np.ndarray, pairs: Sequence[tuple[float, 
         cv2.line(spectrogram, (lo, PAIR_LINE_Y), (hi, PAIR_LINE_Y), OUTLINE_COLOR_BGR, PAIR_LINE_THICKNESS + OUTLINE_EXTRA_THICKNESS, cv2.LINE_AA)
         cv2.line(spectrogram, (lo, PAIR_LINE_Y), (hi, PAIR_LINE_Y), PAIR_LINE_COLOR_BGR, PAIR_LINE_THICKNESS, cv2.LINE_AA)
 
-        speed = puck_speed_kmh(shot_t, hit_t)
+        speed = puck_speed_kmh(shot_t, hit_t, distance_m)
         if speed is None:
             continue
         text = f"{round(speed)} km/h"
@@ -203,6 +206,7 @@ def compose_annotated_frames(
     frame_times: Optional[Sequence[float]] = None,
     on_progress: Optional[Callable[[int, int], None]] = None,
     profiler: Profiler = NULL_PROFILER,
+    distance_m: float = PUCK_TRAVEL_DISTANCE_M,
 ) -> bool:
     """Runs pose detection AND spectrogram compositing over an already-
     captured sequence of raw frame files in one pass, writing
@@ -263,11 +267,11 @@ def compose_annotated_frames(
             # (so every frame's `bottom[:] = spectrogram` below picks
             # them up for free) and the claps band is built once, not
             # redrawn per frame.
-            claps = detect_claps(audio, SAMPLE_RATE)
+            claps = detect_claps(audio, SAMPLE_RATE, distance_m)
             clap_times = [t for t, _peak_rms in claps]
-            shots = pair_claps(clap_times)
+            shots = pair_claps(clap_times, distance_m)
             pairs = [(shot_t, hit_t) for shot_t, hit_t in shots if hit_t is not None]
-            draw_pair_annotations(spectrogram, pairs, audio_duration_s)
+            draw_pair_annotations(spectrogram, pairs, audio_duration_s, distance_m)
             claps_band = render_claps_band(width, CLAPS_BAND_HEIGHT, clap_times, audio_duration_s)
 
         # One buffer, reused every frame (spec 092) - was two
@@ -374,6 +378,7 @@ def save_shot_images(
     sample_rate: int,
     out_dir: Path,
     filename_stem: str,
+    distance_m: float = PUCK_TRAVEL_DISTANCE_M,
 ) -> list[ShotImage]:
     """For each detected shot (core.claps.pair_claps, spec 111 - every
     shot in the clip, whether or not it has a matching hit) - saves a
@@ -403,9 +408,9 @@ def save_shot_images(
     and closed, so this can't reuse one; only a handful of frames need
     it (one per shot, not per clip frame), so the model-load cost is
     paid once per call, not once per frame."""
-    claps = detect_claps(audio, sample_rate)
+    claps = detect_claps(audio, sample_rate, distance_m)
     clap_times = [t for t, _peak_rms in claps]
-    shots = pair_claps(clap_times)
+    shots = pair_claps(clap_times, distance_m)
 
     frame_paths = sorted(raw_dir.glob(f"*.{extension}"))
     frame_times_arr = np.asarray(frame_times, dtype=np.float64)
@@ -440,7 +445,7 @@ def save_shot_images(
 
             speed_kmh: Optional[float] = None
             if hit_t is not None:
-                speed_kmh = puck_speed_kmh(shot_t, hit_t)
+                speed_kmh = puck_speed_kmh(shot_t, hit_t, distance_m)
                 if speed_kmh is not None:
                     _draw_bottom_centered_label(frame, f"{round(speed_kmh)} km/h", SHOT_IMAGE_FONT_PX, SHOT_IMAGE_LABEL_COLOR_BGR)
 

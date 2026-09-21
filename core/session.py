@@ -27,6 +27,7 @@ import numpy as np
 import sounddevice as sd
 import soundfile as sf
 
+from .claps import PUCK_TRAVEL_DISTANCE_M
 from .compose import ShotImage, compose_annotated_frames, save_shot_images
 from .log_setup import get_logger
 from .pending import PENDING_DIR, delete_pending, write_meta
@@ -188,6 +189,7 @@ class LiveSession:
         # instead of an ephemeral temp dir, for
         # core.pending.process_pending_recording() to pick up later.
         self._defer_processing = False
+        self._shot_distance_m = PUCK_TRAVEL_DISTANCE_M
         self._timestamp = ""
         self._pending_capture_dir: Optional[Path] = None
         self._on_deferred_saved: Callable[[bool], None] = lambda ok: None
@@ -281,6 +283,7 @@ class LiveSession:
         on_deferred_saved: Callable[[bool], None] = lambda ok: None,
         on_shots_ready: Callable[[list[ShotImage], ShotSource], None] = lambda shots, source: None,
         on_capture_ended: Callable[[str], None] = lambda timestamp: None,
+        shot_distance_m: float = PUCK_TRAVEL_DISTANCE_M,
     ) -> None:
         """dispatch, if given, is used to run on_done back on whatever
         thread called start_recording (e.g. Tkinter's root.after(0, fn))
@@ -342,6 +345,7 @@ class LiveSession:
         self._on_shots_ready = on_shots_ready
         self._on_capture_ended = on_capture_ended
         self._defer_processing = defer_processing
+        self._shot_distance_m = shot_distance_m  # spec 128: puck travel distance for the speed calculation
         # A PoseDetector reused continuously across a long idle-preview
         # session (minutes of frames, possibly a prior recording too)
         # was observed to silently stop detecting mid-recording, even
@@ -534,6 +538,7 @@ class LiveSession:
         _finish_deferred_recording for the "Vain nauhoitus" (spec 093)
         alternative."""
         writer = self._frame_writer
+        distance_m = self._shot_distance_m
         tmp_dir = self._tmp_dir
         tmp_dir_path = self._tmp_dir_path
         raw_dir, annotated_dir, out_dir = self._raw_dir, self._annotated_dir, self._out_dir
@@ -579,7 +584,7 @@ class LiveSession:
                     with profiler.accum("shot_images"):
                         shots = save_shot_images(
                             raw_dir, FRAME_FILE_EXTENSION, frame_times, audio_buffer, SAMPLE_RATE,
-                            out_dir, f"shot-improvement-{timestamp}",
+                            out_dir, f"shot-improvement-{timestamp}", distance_m=distance_m,
                         )
                     source = ShotSource(raw_dir, frame_times)
                     dispatch(lambda: on_shots_ready(shots, source))
@@ -617,7 +622,7 @@ class LiveSession:
                         audio_buffer, frame_count, FRAME_WIDTH, FRAME_HEIGHT,
                         frame_times=frame_times,
                         on_progress=report("Tunnistetaan käsien asentoja ja spektrogrammi"),
-                        profiler=profiler,
+                        profiler=profiler, distance_m=distance_m,
                     )
                     encode_frames_with_audio(
                         annotated_dir, audio_tmp, annotated_out, actual_fps, frame_count,
@@ -668,6 +673,7 @@ class LiveSession:
         this mode "fluent" while still giving the same immediate shot
         browsing as a normal recording. No mp4 is written either way."""
         writer = self._frame_writer
+        distance_m = self._shot_distance_m
         pending_dir = self._pending_capture_dir
         raw_dir = self._raw_dir
         video_name, audio_name = self.video_name, self.audio_name
@@ -694,7 +700,7 @@ class LiveSession:
                     write_meta(
                         pending_dir, frame_count=frame_count, actual_fps=actual_fps,
                         duration_s=duration_s, video_name=video_name, audio_name=audio_name,
-                        frame_times=frame_times,
+                        frame_times=frame_times, distance_m=distance_m,
                     )
                     ok = True
                     logger.info(
@@ -706,7 +712,7 @@ class LiveSession:
                         out_dir.mkdir(parents=True, exist_ok=True)
                         shots = save_shot_images(
                             raw_dir, FRAME_FILE_EXTENSION, frame_times, audio_buffer, SAMPLE_RATE,
-                            out_dir, f"shot-improvement-{timestamp}",
+                            out_dir, f"shot-improvement-{timestamp}", distance_m=distance_m,
                         )
                         source = ShotSource(raw_dir, frame_times)
                         dispatch(lambda: on_shots_ready(shots, source))

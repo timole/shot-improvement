@@ -237,3 +237,35 @@ def test_real_clip_two_ground_truth_pairs_and_four_unpaired_shots() -> None:
     assert unpaired == [11.326, 15.476, 19.551, 23.719]
     assert puck_speed_kmh(*pairs[0]) == pytest.approx(70.6, abs=0.5)
     assert puck_speed_kmh(*pairs[1]) == pytest.approx(72.1, abs=0.5)
+
+
+# --- spec 128: shot positions / distance-scaled pairing -----------------------
+
+
+def test_shot_positions_distances_and_default() -> None:
+    from core.claps import DEFAULT_SHOT_POSITION, SHOT_POSITIONS
+
+    by_key = {p.key: p.distance_m for p in SHOT_POSITIONS}
+    assert by_key == {
+        "blue_line": pytest.approx(18.5),
+        "red_line": pytest.approx(26.0),
+        "other_blue_line": pytest.approx(33.5),
+        "faceoff_dots": pytest.approx(46.0),
+        "end_to_end": pytest.approx(57.0),
+    }
+    assert DEFAULT_SHOT_POSITION.key == "blue_line"
+
+
+def test_hit_delay_window_scales_with_distance_and_keeps_the_original_for_57m() -> None:
+    from core.claps import PUCK_TRAVEL_DISTANCE_M, hit_delay_window
+
+    assert hit_delay_window(PUCK_TRAVEL_DISTANCE_M) == pytest.approx((1.5, 4.0))
+    lo, hi = hit_delay_window(18.5)
+    assert lo == pytest.approx(0.487, abs=0.01)
+    assert hi == pytest.approx(1.298, abs=0.01)
+
+
+def test_pair_claps_accepts_a_short_blue_line_shot_only_with_its_distance() -> None:
+    # 0.8 s apart: a 83 km/h shot over 18.5 m, impossible over 57 m.
+    assert pair_claps([1.0, 1.8], distance_m=18.5) == [(1.0, 1.8)]
+    assert pair_claps([1.0, 1.8]) == [(1.0, None), (1.8, None)]

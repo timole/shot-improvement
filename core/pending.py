@@ -44,6 +44,7 @@ from typing import Callable, Optional
 
 import soundfile as sf
 
+from .claps import PUCK_TRAVEL_DISTANCE_M
 from .log_setup import get_logger
 from .profiling import NULL_PROFILER, Profiler
 
@@ -73,6 +74,9 @@ class PendingRecording:
     # queue across an app upgrade) - process_pending_recording() falls
     # back to the old even-spacing assumption in that case.
     frame_times: list[float] = field(default_factory=list)
+    # Spec 128: the shot position's puck-travel distance chosen when this
+    # was recorded (processing can happen long after) - see core.claps.
+    distance_m: float = PUCK_TRAVEL_DISTANCE_M
 
     @property
     def raw_dir(self) -> Path:
@@ -97,6 +101,7 @@ def write_meta(
     video_name: str,
     audio_name: Optional[str],
     frame_times: Optional[list[float]] = None,
+    distance_m: float = PUCK_TRAVEL_DISTANCE_M,
 ) -> None:
     meta = {
         "frame_count": frame_count,
@@ -106,6 +111,7 @@ def write_meta(
         "audio_name": audio_name,
         "created_at": datetime.now().isoformat(),
         "frame_times": frame_times or [],
+        "distance_m": distance_m,
     }
     (dir_path / META_FILENAME).write_text(json.dumps(meta, indent=2), encoding="utf-8")
 
@@ -141,6 +147,7 @@ def list_pending(pending_dir: Path = PENDING_DIR) -> list[PendingRecording]:
                 audio_name=meta.get("audio_name"),
                 created_at=str(meta["created_at"]),
                 frame_times=[float(t) for t in meta.get("frame_times", [])],
+                distance_m=float(meta.get("distance_m", PUCK_TRAVEL_DISTANCE_M)),
             ))
         except (json.JSONDecodeError, KeyError, ValueError, OSError):
             logger.warning("list_pending: %s has an unreadable %s, skipping", entry.name, META_FILENAME, exc_info=True)
@@ -236,14 +243,14 @@ def process_pending_recording(
                     audio_buffer, item.frame_count, FRAME_WIDTH, FRAME_HEIGHT,
                     frame_times=item.frame_times,
                     on_progress=report("Tunnistetaan käsien asentoja ja spektrogrammi"),
-                    profiler=profiler,
+                    profiler=profiler, distance_m=item.distance_m,
                 )
                 # Spec 099: a plain snapshot + speed label per detected
                 # shot, alongside the raw/annotated mp4s.
                 with profiler.accum("shot_images"):
                     save_shot_images(
                         item.raw_dir, FRAME_FILE_EXTENSION, item.frame_times, audio_buffer, SAMPLE_RATE,
-                        out_dir, f"shot-improvement-{item.timestamp}",
+                        out_dir, f"shot-improvement-{item.timestamp}", distance_m=item.distance_m,
                     )
                 encode_frames_with_audio(
                     annotated_dir, item.audio_path, annotated_out, item.actual_fps, item.frame_count,

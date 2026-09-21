@@ -79,6 +79,37 @@ RINK_LENGTH_M = 61.0
 GOAL_LINE_OFFSET_M = 4.0
 PUCK_TRAVEL_DISTANCE_M = RINK_LENGTH_M - GOAL_LINE_OFFSET_M  # 57.0
 
+
+class ShotPosition(NamedTuple):
+    """Where the shot is taken from, and how far the puck then travels
+    to the goal (spec 128)."""
+
+    key: str
+    label: str  # Finnish, shown in the GUI's picker
+    distance_m: float
+
+
+# Distances follow the IIHF rink (60 m long; goal line 4.0 m from the end
+# boards; blue lines 15.0 m apart, i.e. 22.5 m from the end boards; the
+# centre line at 30 m; end-zone face-off spots 6 m from the goal line, i.e.
+# 10 m from the end boards) - the shooter's end boards are 0 m, the goal
+# shot at is the far one, whose goal line is at 60 - 4 = 56 m.
+_FAR_GOAL_LINE_M = 56.0
+SHOT_POSITIONS: tuple[ShotPosition, ...] = (
+    # Default: shooting from the blue line of the attacking zone (37.5 m).
+    ShotPosition("blue_line", "Sinisestä viivasta maaliin (18,5 m)", _FAR_GOAL_LINE_M - 37.5),
+    ShotPosition("red_line", "Keskiviivalta maaliin (26 m)", _FAR_GOAL_LINE_M - 30.0),
+    # The other blue line: the one in the shooter's own zone (22.5 m).
+    ShotPosition("other_blue_line", "Toisesta sinisestä viivasta maaliin (33,5 m)", _FAR_GOAL_LINE_M - 22.5),
+    # The line through the two end-zone face-off spots of the shooter's
+    # own (defence) zone (10 m).
+    ShotPosition("faceoff_dots", "Oman alueen aloituspisteiden linjalta maaliin (46 m)", _FAR_GOAL_LINE_M - 10.0),
+    # The original measurement (specs 098-127): from the own goal line to
+    # the far end boards, on a 61 m rink.
+    ShotPosition("end_to_end", "Päätyviivalta vastapäiseen päätyyn (57 m)", PUCK_TRAVEL_DISTANCE_M),
+)
+DEFAULT_SHOT_POSITION = SHOT_POSITIONS[0]
+
 RMS_WINDOW = 256  # ~5.8ms @ 44.1kHz
 # Known mic-startup pop artifact (diagnosed in spec 097's AV-sync work) -
 # excluded from both detection and the threshold's own statistics, since
@@ -130,6 +161,15 @@ MAX_CLAPS_PER_SECOND = 2.0
 # wrongly paired with the shot that follows it).
 MIN_HIT_DELAY_S = 1.5
 MAX_HIT_DELAY_S = 4.0
+
+
+def hit_delay_window(distance_m: float = PUCK_TRAVEL_DISTANCE_M) -> tuple[float, float]:
+    """(min, max) plausible shot-to-hit delay for a shot travelling
+    distance_m: the MIN/MAX_HIT_DELAY_S window (tuned for the full
+    PUCK_TRAVEL_DISTANCE_M), scaled to the same speed bounds (spec 128) -
+    a blue-line shot of 18.5 m arrives in 0.49-1.30 s, not 1.5-4 s."""
+    scale = distance_m / PUCK_TRAVEL_DISTANCE_M
+    return MIN_HIT_DELAY_S * scale, MAX_HIT_DELAY_S * scale
 # Guards puck_speed_kmh's division - shouldn't be reachable given
 # MIN_HIT_DELAY_S, but cheap to guard explicitly.
 MIN_PAIR_INTERVAL_S = 0.05
@@ -180,7 +220,7 @@ def _shot_band_fraction(audio: np.ndarray, sample_rate: int, center_t: float) ->
     return float(spectrum[band].sum() / total)
 
 
-def detect_claps(audio: np.ndarray, sample_rate: int) -> list[Clap]:
+def detect_claps(audio: np.ndarray, sample_rate: int, distance_m: float = PUCK_TRAVEL_DISTANCE_M) -> list[Clap]:
     """Returns each detected event's (time_s, peak_rms), sorted by time.
     See module docstring for the algorithm and why each constant has
     the value it does."""
@@ -210,13 +250,17 @@ def detect_claps(audio: np.ndarray, sample_rate: int) -> list[Clap]:
     candidate_rms = rms[candidates]
     candidate_times = times[candidates]
     claps: list[Clap] = []
+    # A short shot's hit can follow within MIN_SEPARATION_S of the shot
+    # (18.5 m at 130 km/h is 0.51 s) - never suppress events closer than
+    # the shortest plausible shot-to-hit delay (spec 128).
+    min_separation_s = min(MIN_SEPARATION_S, 0.8 * hit_delay_window(distance_m)[0])
     while len(candidates) > 0:
         best = int(np.argmax(candidate_rms))
         peak_t = float(candidate_times[best])
         peak_rms = float(candidate_rms[best])
         if _shot_band_fraction(audio, sample_rate, peak_t) >= SHOT_BAND_FRACTION_MIN:
             claps.append(Clap(peak_t, peak_rms))
-        keep = np.abs(candidate_times - peak_t) > MIN_SEPARATION_S
+        keep = np.abs(candidate_times - peak_t) > min_separation_s
         candidates, candidate_rms, candidate_times = candidates[keep], candidate_rms[keep], candidate_times[keep]
     claps.sort(key=lambda c: c.time_s)
 
@@ -235,7 +279,7 @@ def detect_claps(audio: np.ndarray, sample_rate: int) -> list[Clap]:
     return claps
 
 
-def pair_claps(clap_times: list[float]) -> list[tuple[float, Optional[float]]]:
+def pair_claps(clap_times: list[float], distance_m: float = PUCK_TRAVEL_DISTANCE_M) -> list[tuple[float, Optional[float]]]:
     """Every detected shot's (shot_t, hit_t), in chronological order by
     shot_t - hit_t is None when no later clap lands within
     [MIN_HIT_DELAY_S, MAX_HIT_DELAY_S] of it (too quiet to have an
@@ -250,8 +294,9 @@ def pair_claps(clap_times: list[float]) -> list[tuple[float, Optional[float]]]:
     naive consecutive pairing broke on a real clip."""
     shots: list[tuple[float, Optional[float]]] = []
     pending: Optional[float] = None
+    min_delay_s, max_delay_s = hit_delay_window(distance_m)
     for t in clap_times:
-        if pending is not None and MIN_HIT_DELAY_S <= (t - pending) <= MAX_HIT_DELAY_S:
+        if pending is not None and min_delay_s <= (t - pending) <= max_delay_s:
             shots.append((pending, t))
             pending = None
             continue

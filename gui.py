@@ -25,6 +25,7 @@ from PIL import Image, ImageTk
 
 from core import azure_sync, cloud_sync, devices, pending
 from core.status_publish import StatusPublisher
+from core.claps import DEFAULT_SHOT_POSITION, SHOT_POSITIONS
 from core.compose import ShotImage, select_shot_frame_range
 from core.log_setup import get_logger, setup_logging
 from core.playback import SKIP_SECONDS, SPEED_OPTIONS, ClipPlayer, format_time
@@ -267,6 +268,17 @@ class App:
         self.duration_spinbox.pack(side="left")
         self.record_button = ttk.Button(frame, text="Tallenna", command=self.on_record_click, state="disabled")
         self.record_button.pack(side="left", padx=(8, 0))
+
+        # Spec 128: where the shot is taken from - sets the distance the
+        # puck's speed is computed over (core.claps.SHOT_POSITIONS).
+        position_row = ttk.Frame(root)
+        position_row.pack(pady=(0, 4))
+        ttk.Label(position_row, text="Ammuntapaikka:").pack(side="left", padx=(0, 4))
+        self.shot_position_var = tk.StringVar(value=DEFAULT_SHOT_POSITION.label)
+        ttk.Combobox(
+            position_row, textvariable=self.shot_position_var, state="readonly", width=44,
+            values=[p.label for p in SHOT_POSITIONS],
+        ).pack(side="left")
 
         # Spec 093: post-capture processing (pose annotation,
         # spectrogram, ffmpeg encoding) is CPU-heavy enough on modest
@@ -693,7 +705,15 @@ class App:
             on_deferred_saved=self._on_deferred_saved,
             on_shots_ready=self._on_shots_ready,
             on_capture_ended=self._on_capture_ended,
+            shot_distance_m=self._selected_shot_distance_m(),
         )
+
+    def _selected_shot_distance_m(self) -> float:
+        label = self.shot_position_var.get()
+        for position in SHOT_POSITIONS:
+            if position.label == label:
+                return position.distance_m
+        return DEFAULT_SHOT_POSITION.distance_m
 
     @staticmethod
     def _play_beep() -> None:
