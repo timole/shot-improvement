@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="fi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Shot - Android</title>
+<meta name="description" content="Kiekon nopeuden mittaus äänestä Android-puhelimella, ilman verkkoyhteyttä.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🏒</text></svg>">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.8/css/bootstrap.min.css">
+</head>
+<body class="bg-light">
+<main class="container py-4" style="max-width: 36rem;">
+  <h1 class="h3 mb-3">🏒 Shot – Android</h1>
+  <p>Mittaa kiekon nopeuden äänestä: mailan ja kiekon isku sekä kiekon osuma päätyyn. Toimii kokonaan ilman verkkoyhteyttä.</p>
+
+  <a class="btn btn-primary btn-lg w-100 mb-4" href="/app.apk" download>Lataa sovellus (.apk)</a>
+
+  <h2 class="h5">Asennus</h2>
+  <ol>
+    <li>Avaa tämä sivu puhelimen Chrome-selaimella ja paina <strong>Lataa sovellus</strong>.</li>
+    <li>Kun lataus valmistuu, avaa tiedosto. Android pyytää sallimaan asennuksen tuntemattomista lähteistä Chromelle – salli se.</li>
+    <li>Jos Play Protect varoittaa tuntemattomasta sovelluksesta, valitse <strong>Asenna silti</strong>. Sovellus on allekirjoitettu vain kehityskäyttöön.</li>
+    <li>Avaa <strong>Shot</strong> ja salli mikrofoni.</li>
+  </ol>
+
+  <h2 class="h5 mt-4">Mittaus</h2>
+  <ol>
+    <li>Seiso sinisellä viivalla ja pane puhelin viereesi, mikrofoni kohti päätyä.</li>
+    <li>Paina <strong>Tallenna 10 s</strong> ja ammu kiekko päätyyn 10 sekunnin sisällä.</li>
+    <li>Sovellus näyttää nopeuden. Matka on 22,5 m (sinisestä viivasta päätyyn) ja äänen paluumatka on huomioitu.</li>
+  </ol>
+  <p class="text-muted small">Luku on kiekon keskinopeus koko matkalla, joten se on hieman pienempi kuin lähtönopeus. Jokainen tallenne jää puhelimeen (Android/data/tech.timolehtonen.shot/files/Music/recordings) ja sitä ei poisteta.</p>
+</main>
+</body>
+</html>

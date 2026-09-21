@@ -38,18 +38,33 @@ function previewUrl(videoName) {
   return `/api/previews/${videoName.replace(/\.mp4$/, ".jpg")}`;
 }
 
+// Spec 136: public install page for the Android app - shown above both the
+// sign-in card and the gallery, so a phone can get it before signing in.
+function AndroidLink() {
+  return (
+    <div className="bg-success-subtle text-center py-2 small">
+      <a className="fw-semibold text-success-emphasis" href="/android">
+        Lataa Android-sovellus (kiekon nopeus äänestä)
+      </a>
+    </div>
+  );
+}
+
 function LoginCard({ message }) {
   return (
-    <div className="d-flex align-items-center justify-content-center min-vh-100">
-      <div className="card shadow-sm" style={{ maxWidth: 420, width: "100%" }}>
-        <div className="card-body p-4 text-center">
-          <p className="text-success text-uppercase small fw-semibold mb-1">Shot improvement</p>
-          <h1 className="h4 mb-3">Liikeratatallenteet</h1>
-          <p className="text-muted mb-4">Vain omistajalle. Kirjaudu omalla Microsoft-tililläsi.</p>
-          {message && <div className="alert alert-warning py-2 small">{message}</div>}
-          <a className="btn btn-primary" href="/api/login/start">
-            Kirjaudu Microsoft-tilillä
-          </a>
+    <div className="d-flex flex-column min-vh-100">
+      <AndroidLink />
+      <div className="d-flex align-items-center justify-content-center flex-grow-1">
+        <div className="card shadow-sm" style={{ maxWidth: 420, width: "100%" }}>
+          <div className="card-body p-4 text-center">
+            <p className="text-success text-uppercase small fw-semibold mb-1">Shot improvement</p>
+            <h1 className="h4 mb-3">Liikeratatallenteet</h1>
+            <p className="text-muted mb-4">Vain omistajalle. Kirjaudu omalla Microsoft-tililläsi.</p>
+            {message && <div className="alert alert-warning py-2 small">{message}</div>}
+            <a className="btn btn-primary" href="/api/login/start">
+              Kirjaudu Microsoft-tilillä
+            </a>
+          </div>
         </div>
       </div>
     </div>
@@ -277,6 +292,8 @@ function App() {
   }
 
   return (
+    <>
+    <AndroidLink />
     <div className="container py-4">
       <div className="d-flex justify-content-between align-items-center mb-4">
         <div>
@@ -299,6 +316,7 @@ function App() {
         <VideoList videos={videos} />
       )}
     </div>
+    </>
   );
 }
 

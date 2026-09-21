@@ -353,3 +353,43 @@ def test_raw_clip_names_are_servable_but_not_listed() -> None:
     assert blob_videos.is_valid_video_name("shot-improvement-20260919154426-annotated.mp4")
     assert not blob_videos.is_valid_video_name("status/latest.json")
     assert not blob_videos.is_valid_video_name("../shot-improvement-20260919154426.mp4")
+
+
+# --- Android app download (spec 136) ---------------------------------------
+
+
+def test_android_page_is_public() -> None:
+    resp = client.get("/android")
+    assert resp.status_code == 200
+    assert "text/html" in resp.headers["content-type"]
+    assert "/app.apk" in resp.text
+
+
+def test_app_apk_is_public_and_served_as_an_uncached_download(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("server.main.blob_videos.read_apk", lambda: b"PK\x03\x04fake-apk")
+
+    resp = client.get("/app.apk")
+
+    assert resp.status_code == 200
+    assert resp.content == b"PK\x03\x04fake-apk"
+    assert resp.headers["content-type"] == "application/vnd.android.package-archive"
+    assert "attachment" in resp.headers["content-disposition"]
+    assert resp.headers["cache-control"] == "no-store"
+
+
+def test_app_apk_returns_404_when_none_is_published(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _missing() -> bytes:
+        raise ResourceNotFoundError("no such blob")
+
+    monkeypatch.setattr("server.main.blob_videos.read_apk", _missing)
+
+    assert client.get("/app.apk").status_code == 404
+
+
+def test_app_apk_returns_503_on_other_azure_failures(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _boom() -> bytes:
+        raise RuntimeError("azure down")
+
+    monkeypatch.setattr("server.main.blob_videos.read_apk", _boom)
+
+    assert client.get("/app.apk").status_code == 503

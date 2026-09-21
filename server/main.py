@@ -24,7 +24,7 @@ from typing import Optional
 import httpx
 from azure.core.exceptions import ResourceNotFoundError
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, RedirectResponse, Response
 
 from . import auth, blob_videos, config
 
@@ -238,3 +238,31 @@ def index_page() -> FileResponse:
 @app.get("/app.js")
 def app_js() -> FileResponse:
     return FileResponse(WEB_DIR / "app.js", media_type="text/javascript")
+
+
+@app.get("/android")
+def android_page() -> FileResponse:
+    """Spec 136: public install page for the Android app (no sign-in - the
+    phone's browser has to be able to fetch the APK)."""
+    return FileResponse(WEB_DIR / "android.html")
+
+
+@app.get("/app.apk")
+def app_apk() -> Response:
+    try:
+        data = blob_videos.read_apk()
+    except ResourceNotFoundError:
+        raise HTTPException(status_code=404, detail="Sovellusta ei ole julkaistu.")
+    except Exception:
+        logger.exception("Failed to fetch APK")
+        raise HTTPException(status_code=503, detail="Sovelluksen lataus epäonnistui.")
+    # no-store: the blob is replaced on every release, and a cached old
+    # build would be installed again by a phone that re-downloads.
+    return Response(
+        data,
+        media_type="application/vnd.android.package-archive",
+        headers={
+            "Content-Disposition": 'attachment; filename="shot-improvement.apk"',
+            "Cache-Control": "no-store",
+        },
+    )

@@ -41,6 +41,9 @@ VIDEO_NAME_RE = re.compile(r"^shot-improvement-(\d{14})-annotated\.mp4$")
 # but still not listed in list_videos().
 RAW_VIDEO_NAME_RE = re.compile(r"^shot-improvement-(\d{14})\.mp4$")
 STATUS_BLOB_NAME = "status/latest.json"
+# Spec 136: the Android app's APK, uploaded by tools/publish_apk.py. Same
+# container, so the Container App's existing Blob Data Reader role covers it.
+APK_BLOB_NAME = "downloads/shot-improvement.apk"
 PREVIEW_NAME_RE = re.compile(r"^shot-improvement-(\d{14})-annotated\.jpg$")
 
 # Container Apps' ephemeral storage is real disk (unlike Cloud Run's
@@ -131,6 +134,14 @@ def _evict_oldest() -> None:
         cached = sorted(_CACHE_DIR.glob(pattern), key=lambda p: p.stat().st_mtime, reverse=True)
         for stale in cached[keep:]:
             stale.unlink(missing_ok=True)
+
+
+def read_apk() -> bytes:
+    """The current Android APK's bytes, fetched fresh every time - unlike
+    get_cached_path's clips, this blob is overwritten on each release, so
+    a cache keyed by name would serve a stale build. Raises
+    azure.core.exceptions.ResourceNotFoundError if none is published."""
+    return _container().get_blob_client(APK_BLOB_NAME).download_blob().readall()
 
 
 def read_status() -> dict | None:
