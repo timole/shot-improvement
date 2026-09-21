@@ -268,6 +268,9 @@ class App:
         self.duration_spinbox.pack(side="left")
         self.record_button = ttk.Button(frame, text="Tallenna", command=self.on_record_click, state="disabled")
         self.record_button.pack(side="left", padx=(8, 0))
+        # Spec 129: the button says how long the recording will be.
+        self.duration_var.trace_add("write", lambda *_: self._update_record_button_text())
+        self._update_record_button_text()
 
         # Spec 128: where the shot is taken from - sets the distance the
         # puck's speed is computed over (core.claps.SHOT_POSITIONS).
@@ -707,6 +710,14 @@ class App:
             on_capture_ended=self._on_capture_ended,
             shot_distance_m=self._selected_shot_distance_m(),
         )
+
+    def _update_record_button_text(self) -> None:
+        try:
+            seconds = max(1.0, float(self.duration_var.get()))
+        except ValueError:
+            self.record_button.config(text="Tallenna")
+            return
+        self.record_button.config(text=f"Tallenna {seconds:g} s")
 
     def _selected_shot_distance_m(self) -> float:
         label = self.shot_position_var.get()
