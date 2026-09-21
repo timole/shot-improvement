@@ -95,9 +95,17 @@ class ShotPosition(NamedTuple):
 # 10 m from the end boards) - the shooter's end boards are 0 m, the goal
 # shot at is the far one, whose goal line is at 60 - 4 = 56 m.
 _FAR_GOAL_LINE_M = 56.0
+GOAL_DEPTH_M = 1.12  # IIHF goal: 112 cm deep at the base
 SHOT_POSITIONS: tuple[ShotPosition, ...] = (
     # Default: shooting from the blue line of the attacking zone (37.5 m).
     ShotPosition("blue_line", "Sinisestä viivasta maaliin (18,5 m)", _FAR_GOAL_LINE_M - 37.5),
+    # Camera behind the goal: the hit is heard when the puck reaches the
+    # back of the net, one goal depth (IIHF net base depth 1.12 m) past
+    # the goal line.
+    ShotPosition(
+        "blue_line_goal_back", "Kamera maalin takana: sinisestä viivasta maalin perään (19,6 m)",
+        _FAR_GOAL_LINE_M - 37.5 + GOAL_DEPTH_M,
+    ),
     ShotPosition("red_line", "Keskiviivalta maaliin (26 m)", _FAR_GOAL_LINE_M - 30.0),
     # The other blue line: the one in the shooter's own zone (22.5 m).
     ShotPosition("other_blue_line", "Toisesta sinisestä viivasta maaliin (33,5 m)", _FAR_GOAL_LINE_M - 22.5),

@@ -248,6 +248,7 @@ def test_shot_positions_distances_and_default() -> None:
     by_key = {p.key: p.distance_m for p in SHOT_POSITIONS}
     assert by_key == {
         "blue_line": pytest.approx(18.5),
+        "blue_line_goal_back": pytest.approx(19.62),
         "red_line": pytest.approx(26.0),
         "other_blue_line": pytest.approx(33.5),
         "faceoff_dots": pytest.approx(46.0),
