@@ -106,6 +106,10 @@ SHOT_POSITIONS: tuple[ShotPosition, ...] = (
         "blue_line_goal_back", "Kamera maalin takana: sinisestä viivasta maalin perään (19,6 m)",
         _FAR_GOAL_LINE_M - 37.5 + GOAL_DEPTH_M,
     ),
+    # Camera on top of the goal: measured from the blue line to the rink's
+    # end line (the end boards) - the blue line is 22.5 m from the end
+    # boards (IIHF).
+    ShotPosition("blue_line_to_end", "Kamera maalin päällä: sinisestä viivasta päätyyn (22,5 m)", 22.5),
     ShotPosition("red_line", "Keskiviivalta maaliin (26 m)", _FAR_GOAL_LINE_M - 30.0),
     # The other blue line: the one in the shooter's own zone (22.5 m).
     ShotPosition("other_blue_line", "Toisesta sinisestä viivasta maaliin (33,5 m)", _FAR_GOAL_LINE_M - 22.5),
