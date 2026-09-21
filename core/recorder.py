@@ -117,7 +117,14 @@ MANUAL_EXPOSURE_MODE_DSHOW = 0.25
 # at 60fps. Camera/driver-specific; revisit if a real recording still
 # doesn't reach 60fps with this set (see camera_info() / the "Opened
 # camera" log line for the real negotiated exposure).
-FIXED_EXPOSURE_DSHOW = -7
+# Spec 127: -7 blew out a bright outdoor/daylight scene (mean brightness
+# 224/255, 62% of pixels saturated); measured on the C922 in daylight:
+# -9 -> mean 175, -10 -> 149 (22% saturated), -11 (the driver's minimum,
+# ~0.5ms) -> 115 with 3.7% saturated, i.e. a well-exposed picture. The
+# app is used in daylight or a lit ice hall, so it always has plenty of
+# light; a short exposure also freezes fast puck/stick motion. Raise it
+# (towards -7) only for a dim room.
+FIXED_EXPOSURE_DSHOW = -11
 # Spec 112: fixing exposure alone (spec 109) wasn't enough - real
 # recordings still measured ~30-34fps, well under the negotiated 60.
 # Autofocus was the next suspect (it re-drives the lens - a real,
