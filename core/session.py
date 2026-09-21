@@ -13,6 +13,7 @@ streaming frames to disk while a recording is in progress.
 
 from __future__ import annotations
 
+import math
 import queue
 import tempfile
 import threading
@@ -37,7 +38,10 @@ from .recorder import (
     FRAME_FILE_EXTENSION,
     RAW_FRAME_JPEG_QUALITY,
     FRAME_HEIGHT,
+    FIXED_EXPOSURE_DSHOW,
     FRAME_WIDTH,
+    MAX_EXPOSURE_DSHOW,
+    MIN_EXPOSURE_DSHOW,
     SAMPLE_RATE,
     encode_frames_with_audio,
     lower_current_thread_priority,
@@ -168,6 +172,10 @@ class LiveSession:
         self._on_recording_done: Optional[Callable[[Optional[RecordingResult]], None]] = None
         self._on_shots_ready: Callable[[list[ShotImage], ShotSource], None] = lambda shots, source: None
         self._consecutive_read_failures = 0
+        # Spec 135: exposure auto-calibration state (see auto_exposure_step).
+        self._exposure: float = FIXED_EXPOSURE_DSHOW
+        self._last_luma: Optional[float] = None
+        self._frames_since_exposure_change = 0
         # Spec 091: a count, not a bool - a new recording can now start
         # (see start_recording()) while an older one's background worker
         # is still running, so more than one can be in flight at once.
@@ -246,6 +254,34 @@ class LiveSession:
     def resume_camera(self) -> None:
         logger.info("resume_camera: reopening %r", self.video_name)
         self.cap = open_camera(self.video_index)
+        self._exposure = FIXED_EXPOSURE_DSHOW
+
+    def set_exposure(self, value: float) -> None:
+        """Sets the (manual) camera exposure; DirectShow log2-seconds."""
+        self.cap.set(cv2.CAP_PROP_EXPOSURE, value)
+        self._exposure = value
+        self._frames_since_exposure_change = 0
+
+    def auto_exposure_step(self, target_luma: float = 118.0, tolerance: float = 10.0) -> bool:
+        """One step of the exposure calibration (spec 135): nudges the
+        manual exposure so the picture's mean brightness approaches
+        target_luma. Brightness is roughly proportional to exposure time,
+        i.e. doubles per +1 in the log2 scale, so the step is log2(target /
+        current) - damped and limited. Waits a few frames after each change
+        (the camera applies it with a delay). Returns True once settled
+        (within tolerance, or at a limit of the allowed exposure range)."""
+        luma = self._last_luma
+        if luma is None or self._frames_since_exposure_change < 5:
+            return False
+        if abs(luma - target_luma) <= tolerance:
+            return True
+        step = max(-1.5, min(1.5, 0.8 * math.log2(target_luma / max(luma, 1.0))))
+        new = max(MIN_EXPOSURE_DSHOW, min(MAX_EXPOSURE_DSHOW, self._exposure + step))
+        if abs(new - self._exposure) < 0.05:
+            return True  # at the limit of the range
+        logger.info("auto_exposure: luma %.0f (target %.0f), exposure %.2f -> %.2f", luma, target_luma, self._exposure, new)
+        self.set_exposure(new)
+        return False
 
     def switch_video_device(self, index: int, name: str) -> None:
         if self._recording:
@@ -259,6 +295,7 @@ class LiveSession:
             raise RuntimeError(f"Kameraa '{name}' ei saatu auki.")
         self.cap = new_cap
         self.video_index, self.video_name = index, name
+        self._exposure = FIXED_EXPOSURE_DSHOW  # open_camera applies it
         old_cap.release()
         after = self.camera_info()
         logger.info("switch_video_device: %dx%d@%.1ffps -> %r %dx%d@%.1ffps", *before, name, *after)
@@ -450,6 +487,11 @@ class LiveSession:
         if self._consecutive_read_failures:
             logger.info("read_frame: camera recovered after %d failed reads", self._consecutive_read_failures)
         self._consecutive_read_failures = 0
+        # Cheap brightness estimate (every 8th pixel each way) for the
+        # exposure calibration - BGR weighted to luminance.
+        small = frame[::8, ::8].reshape(-1, 3).mean(axis=0)
+        self._last_luma = float(0.114 * small[0] + 0.587 * small[1] + 0.299 * small[2])
+        self._frames_since_exposure_change += 1
 
         if self._recording:
             # Spec 086: pose inference is NOT run here anymore - it's

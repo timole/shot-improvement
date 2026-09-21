@@ -125,6 +125,13 @@ MANUAL_EXPOSURE_MODE_DSHOW = 0.25
 # light; a short exposure also freezes fast puck/stick motion. Raise it
 # (towards -7) only for a dim room.
 FIXED_EXPOSURE_DSHOW = -11
+# Spec 135: auto-calibration when "Tallenna" is pressed: the exposure is
+# searched (still a fixed, manual value while recording) between the
+# driver's minimum and this ceiling - -6 (~15.6 ms) is the longest that
+# still comfortably fits one frame at 30 fps (33 ms); anything longer
+# would cost frame rate, which matters most here.
+MIN_EXPOSURE_DSHOW = -11
+MAX_EXPOSURE_DSHOW = -6
 # Spec 112: fixing exposure alone (spec 109) wasn't enough - real
 # recordings still measured ~30-34fps, well under the negotiated 60.
 # Autofocus was the next suspect (it re-drives the lens - a real,

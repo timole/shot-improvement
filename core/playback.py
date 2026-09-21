@@ -34,6 +34,7 @@ logger = get_logger("playback")
 
 SPEED_OPTIONS = [0.25, 0.5, 1.0, 1.5, 2.0]
 SKIP_SECONDS = 5.0
+SKIP_SHORT_SECONDS = 1.0  # spec 135: the +1s / -1s buttons
 
 
 def format_time(seconds: float) -> str:

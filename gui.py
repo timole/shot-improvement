@@ -29,8 +29,8 @@ from core.stick import HandsTrack, StickAnnotator, draw_stick, hands_sidecar_pat
 from core.claps import DEFAULT_SHOT_POSITION, SHOT_POSITIONS
 from core.compose import ShotImage, select_shot_frame_range
 from core.log_setup import get_logger, setup_logging
-from core.playback import SKIP_SECONDS, SPEED_OPTIONS, ClipPlayer, format_time
-from core.recorder import FRAME_FILE_EXTENSION, FRAME_HEIGHT, FRAME_WIDTH, RECORDINGS_DIR
+from core.playback import SKIP_SECONDS, SKIP_SHORT_SECONDS, SPEED_OPTIONS, ClipPlayer, format_time
+from core.recorder import FIXED_EXPOSURE_DSHOW, FRAME_FILE_EXTENSION, FRAME_HEIGHT, FRAME_WIDTH, RECORDINGS_DIR
 from core.segmentation import BackgroundRemover
 from core.session import LiveSession, RecordingResult, ShotSource
 
@@ -58,9 +58,12 @@ PREVIEW_POLL_MS = 10  # self-paced anyway - actual cadence follows the work each
 # second per step, with a short beep on each step so the user (who is
 # presumably in front of the camera, not looking at the screen) knows
 # when to get ready without watching the status label.
-COUNTDOWN_SECONDS = 3
+DEFAULT_BEEPS = 3  # spec 135: beeps (= seconds) before recording; user-settable
+MAX_BEEPS = 10
+CALIBRATION_INTERVAL_MS = 250
 COUNTDOWN_BEEP_FREQ_HZ = 880
 COUNTDOWN_BEEP_MS = 150
+WAKE_DELAY_MS = 300
 # _tick() runs the whole GUI's live preview/playback loop; one call
 # taking much longer than that is worth a log line (see LiveSession's
 # own, tighter, SLOW_FRAME_WARN_THRESHOLD_S for the read_frame()-level
@@ -153,6 +156,7 @@ class App:
         self._shot_frame_cache: dict[int, tuple[list[Path], list[float], int]] = {}
         self._raw_playing = False
         self._raw_play_after_id: Optional[str] = None
+        self._calibrating = False
         self._default_device_labels: Optional[tuple[str, str, str]] = None
         self._raw_frame_pos = 0
         self._raw_window: Optional[tuple[list[Path], list[float]]] = None  # selected shot's frames (paths, times)
@@ -285,6 +289,14 @@ class App:
             frame, from_=1, to=60, increment=1, textvariable=self.duration_var, width=5
         )
         self.duration_spinbox.pack(side="left")
+        # Spec 135: number of countdown beeps (one per second) before the
+        # recording starts; the camera exposure is calibrated meanwhile.
+        ttk.Label(frame, text="Piippaukset:").pack(side="left", padx=(8, 4))
+        self.beeps_var = tk.StringVar(value=str(DEFAULT_BEEPS))
+        self.beeps_spinbox = ttk.Spinbox(
+            frame, from_=1, to=MAX_BEEPS, increment=1, textvariable=self.beeps_var, width=3
+        )
+        self.beeps_spinbox.pack(side="left")
         self.record_button = ttk.Button(frame, text="Tallenna", command=self.on_record_click, state="disabled")
         self.record_button.pack(side="left", padx=(8, 0))
         # Spec 129: the button says how long the recording will be.
@@ -358,9 +370,11 @@ class App:
         # enough that this functionality went undiscovered.
         ttk.Button(transport, text="-1 ruutu", width=8, command=self.on_prev_frame_click).pack(side="left", padx=1)
         ttk.Button(transport, text="⏪5s", width=4, command=self.on_skip_back_click).pack(side="left", padx=1)
+        ttk.Button(transport, text="-1s", width=4, command=self.on_skip_back_short_click).pack(side="left", padx=1)
         self.play_pause_button = ttk.Button(transport, text="▶", width=3, command=self.on_play_pause_click)
         self.play_pause_button.pack(side="left", padx=1)
         ttk.Button(transport, text="■", width=3, command=self.on_stop_click).pack(side="left", padx=1)
+        ttk.Button(transport, text="+1s", width=4, command=self.on_skip_forward_short_click).pack(side="left", padx=1)
         ttk.Button(transport, text="5s⏩", width=4, command=self.on_skip_forward_click).pack(side="left", padx=1)
         ttk.Button(transport, text="+1 ruutu", width=8, command=self.on_next_frame_click).pack(side="left", padx=1)
         ttk.Button(transport, text="Takaisin livekuvaan", command=self.on_back_to_live_click).pack(
@@ -805,7 +819,43 @@ class App:
 
         self.record_button.config(state="disabled")
         self._counting_down = True
-        self._run_countdown(duration_s, COUNTDOWN_SECONDS)
+        # Spec 135: while the beeps play, calibrate the exposure to the
+        # scene's light (fixed again once recording starts). A silent
+        # blip first wakes the audio output, whose first beep was being
+        # swallowed while the device powered up.
+        self._calibrating = True
+        self._calibrate_tick()
+        self._wake_audio_output()
+        self.root.after(WAKE_DELAY_MS, lambda: self._run_countdown(duration_s, self._beep_count()))
+
+    def _beep_count(self) -> int:
+        try:
+            return max(1, min(MAX_BEEPS, int(float(self.beeps_var.get()))))
+        except ValueError:
+            return DEFAULT_BEEPS
+
+    def _calibrate_tick(self) -> None:
+        """Runs every CALIBRATION_INTERVAL_MS while the countdown lasts."""
+        if not self._counting_down or self.session is None:
+            self._calibrating = False
+            return
+        try:
+            self.session.auto_exposure_step()
+        except Exception:
+            logger.exception("_calibrate_tick: failed")
+            self._calibrating = False
+            return
+        self.root.after(CALIBRATION_INTERVAL_MS, self._calibrate_tick)
+
+    @staticmethod
+    def _wake_audio_output() -> None:
+        def run() -> None:
+            try:
+                winsound.Beep(37, 1)  # 37 Hz for 1 ms: inaudible, but opens the device
+            except Exception:
+                logger.debug("_wake_audio_output: failed", exc_info=True)
+
+        threading.Thread(target=run, name="shot-improvement-audio-wake", daemon=True).start()
 
     def _run_countdown(self, duration_s: float, seconds_left: int) -> None:
         if seconds_left > 0:
@@ -1386,6 +1436,12 @@ class App:
     def on_skip_forward_click(self) -> None:
         self._skip(SKIP_SECONDS)
 
+    def on_skip_back_short_click(self) -> None:
+        self._skip(-SKIP_SHORT_SECONDS)
+
+    def on_skip_forward_short_click(self) -> None:
+        self._skip(SKIP_SHORT_SECONDS)
+
     def _skip(self, delta_seconds: float) -> None:
         if self._player is None:
             return
@@ -1472,7 +1528,9 @@ class App:
 
         # Settings.
         self.duration_var.set(str(DEFAULT_DURATION_S))
+        self.beeps_var.set(str(DEFAULT_BEEPS))
         self.defer_processing_var.set(True)
+        self.session.set_exposure(FIXED_EXPOSURE_DSHOW)
         self.shot_position_var.set(DEFAULT_SHOT_POSITION.label)
         self.raw_speed_var.set(_speed_label(1.0))
         self.speed_var.set(_speed_label(1.0))
