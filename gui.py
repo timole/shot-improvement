@@ -148,7 +148,7 @@ class App:
         # on_raw_shot_play_pause_click. _shot_frame_cache avoids
         # re-globbing raw_dir on a repeat play of the same shot.
         self._shot_source: Optional[ShotSource] = None
-        self._shot_frame_cache: dict[int, tuple[list[Path], list[float]]] = {}
+        self._shot_frame_cache: dict[int, tuple[list[Path], list[float], int]] = {}
         self._raw_playing = False
         self._raw_play_after_id: Optional[str] = None
         self._raw_frame_pos = 0
@@ -835,6 +835,7 @@ class App:
         self._set_raw_scale(0, 1)
         self.raw_time_var.set("")
         self._show_shot(int(selection[0]))
+        self._selected_raw_window()
 
     def _show_shot(self, index: int) -> None:
         shot = self._shots[index]
@@ -863,28 +864,32 @@ class App:
     # (no ClipPlayer, no mode switch) - see _stop_raw_playback for where
     # it gets interrupted.
 
-    def _shot_frames(self, index: int) -> tuple[list[Path], list[float]]:
-        """(paths, times) for the selected shot's raw preview window,
-        times shifted to start at 0 - cached per shot index so a
-        repeat Play reuses the same directory listing."""
+    def _shot_frames(self, index: int) -> tuple[list[Path], list[float], int]:
+        """(paths, times, shot_pos) for the selected shot's raw preview
+        window: times shifted to start at 0, shot_pos the index of the
+        frame closest to the shot itself (spec 126 - playback and
+        stepping start from there, not from the window's start).
+        Cached per shot index so a repeat Play reuses the same
+        directory listing."""
         cached = self._shot_frame_cache.get(index)
         if cached is not None:
             return cached
         source = self._shot_source
         shot = self._shots[index]
         if source is None:
-            return [], []
+            return [], [], 0
         start_idx, end_idx = select_shot_frame_range(source.frame_times, shot.time_s, shot.hit_t)
         if start_idx < 0:
-            return [], []
+            return [], [], 0
         frame_paths = sorted(source.raw_dir.glob(f"*.{FRAME_FILE_EXTENSION}"))
         if len(frame_paths) != len(source.frame_times):
             logger.warning("_shot_frames: raw frame count mismatch for %s", source.raw_dir)
-            return [], []
+            return [], [], 0
         paths = frame_paths[start_idx : end_idx + 1]
         base_t = source.frame_times[start_idx]
         times = [t - base_t for t in source.frame_times[start_idx : end_idx + 1]]
-        result = (paths, times)
+        shot_pos = min(range(len(times)), key=lambda i: abs(times[i] - (shot.time_s - base_t)))
+        result = (paths, times, shot_pos)
         self._shot_frame_cache[index] = result
         return result
 
@@ -896,12 +901,16 @@ class App:
         selection = self.shots_tree.selection()
         if not selection:
             return None
-        paths, times = self._shot_frames(int(selection[0]))
+        paths, times, shot_pos = self._shot_frames(int(selection[0]))
         if not paths:
             self._set_status_if_idle("Raakadataa ei ole enää saatavilla tälle laukaukselle.")
             return None
         self._raw_window = (paths, times)
-        self._set_raw_scale(self._raw_frame_pos, len(paths) - 1)
+        # Spec 126: start at the shot's own frame, so Play and +1/-1
+        # ruutu continue from what the shot image shows.
+        self._raw_frame_pos = shot_pos
+        self._set_raw_scale(shot_pos, len(paths) - 1)
+        self.raw_time_var.set(f"ruutu {shot_pos + 1}/{len(paths)}  {times[shot_pos]:.2f} s")
         return self._raw_window
 
     def _set_raw_scale(self, pos: int, last: int) -> None:
