@@ -623,6 +623,7 @@ class LiveSession:
                         frame_times=frame_times,
                         on_progress=report("Tunnistetaan käsien asentoja ja spektrogrammi"),
                         profiler=profiler, distance_m=distance_m,
+                        hands_json=out_dir / f"shot-improvement-{timestamp}-hands.json",
                     )
                     encode_frames_with_audio(
                         annotated_dir, audio_tmp, annotated_out, actual_fps, frame_count,

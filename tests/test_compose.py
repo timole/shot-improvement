@@ -13,8 +13,6 @@ import numpy as np
 import pytest
 
 from core.compose import (
-    CLAP_TICK_COLOR_BGR,
-    CLAPS_BAND_BG_BGR,
     PAIR_LINE_COLOR_BGR,
     PAIR_LINE_Y,
     SHOT_IMAGE_LABEL_COLOR_BGR,
@@ -22,7 +20,6 @@ from core.compose import (
     _x_for_time,
     composite_into,
     draw_pair_annotations,
-    render_claps_band,
     save_shot_images,
     select_shot_frame_range,
 )
@@ -141,33 +138,6 @@ def test_x_for_time_handles_zero_duration() -> None:
     assert _x_for_time(1.0, 0.0, 200) == 0
 
 
-def test_render_claps_band_is_all_background_when_no_claps() -> None:
-    band = render_claps_band(200, 100, [], duration_s=10.0)
-
-    assert band.shape == (100, 200, 3)
-    assert np.all(band == CLAPS_BAND_BG_BGR)
-
-
-def test_render_claps_band_marks_each_clap_near_its_time() -> None:
-    width, height, duration_s = 200, 100, 10.0
-    band = render_claps_band(width, height, [5.0], duration_s)
-
-    x = _x_for_time(5.0, duration_s, width)
-    # The tick mark's column (and a small neighborhood, for line
-    # anti-aliasing) must not be pure background at the tick's own row.
-    column = band[0, max(x - 2, 0) : x + 3]
-    assert np.any(column != np.array(CLAPS_BAND_BG_BGR))
-
-
-def test_render_claps_band_not_all_background_far_from_claps() -> None:
-    """Sanity check that the band isn't just uniformly painted - most
-    of it should still be background when claps are sparse."""
-    band = render_claps_band(200, 100, [5.0], duration_s=10.0)
-
-    assert np.all(band[:, :10] == CLAPS_BAND_BG_BGR)  # far left, away from the one clap
-    assert np.all(band[:, -10:] == CLAPS_BAND_BG_BGR)  # far right
-
-
 def test_draw_pair_annotations_draws_yellow_at_pair_line_y() -> None:
     width, height, duration_s = 200, 60, 10.0
     spectrogram = np.zeros((height, width, 3), dtype=np.uint8)
@@ -200,28 +170,24 @@ def test_draw_pair_annotations_skips_speed_text_for_near_zero_interval() -> None
     draw_pair_annotations(spectrogram, [(5.0, 5.0001)], duration_s)  # does not raise
 
 
-def test_three_band_composite_buffer_views_are_contiguous_and_disjoint() -> None:
-    """Same premise as test_top_and_bottom_are_contiguous_views_not_copies,
-    extended to the spec-098 claps_view band: all three views must be
-    real C-contiguous slices of ONE buffer (not copies), and a write to
-    claps_view must never touch top/bottom's rows or vice versa."""
-    height, spec_height, claps_height, width = 40, 20, 15, 60
-    composite = np.empty((height + spec_height + claps_height, width, 3), dtype=np.uint8)
+def test_composite_buffer_views_are_contiguous_and_disjoint() -> None:
+    """The video and spectrogram views must be real C-contiguous slices of
+    ONE buffer (not copies), and a write to one must never touch the
+    other's rows (spec 134: the claps band below them is gone)."""
+    height, spec_height, width = 40, 20, 60
+    composite = np.empty((height + spec_height, width, 3), dtype=np.uint8)
     top = composite[:height]
-    bottom = composite[height : height + spec_height]
-    claps_view = composite[height + spec_height :]
+    bottom = composite[height:]
 
-    for view in (top, bottom, claps_view):
+    for view in (top, bottom):
         assert view.flags["C_CONTIGUOUS"]
         assert view.base is composite or view.base is composite.base
 
     top[:] = 1
     bottom[:] = 2
-    claps_view[:] = 3
 
     assert (composite[:height] == 1).all()
-    assert (composite[height : height + spec_height] == 2).all()
-    assert (composite[height + spec_height :] == 3).all()
+    assert (composite[height:] == 2).all()
 
 
 # --- spec 099: per-shot snapshot JPEGs ------------------------------------

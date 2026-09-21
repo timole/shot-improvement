@@ -61,6 +61,7 @@ from .claps import PUCK_TRAVEL_DISTANCE_M, detect_claps, pair_claps, puck_speed_
 from .log_setup import get_logger
 from .pose import PalmBox, PoseDetector, draw_palm_boxes
 from .profiling import NULL_PROFILER, Profiler
+from .stick import hands_from_boxes, write_hands_sidecar
 from .spectrogram import (
     PLAYHEAD_COLOR_BGR,
     PLAYHEAD_THICKNESS,
@@ -69,19 +70,6 @@ from .spectrogram import (
 )
 
 logger = get_logger("compose")
-
-# Spec 098: a claps/puck-speed annotation band below the spectrogram -
-# same 1280x1200 total composite height as before spec 098 (720 video +
-# 280 spectrogram, shrunk from 480 - + 200 here).
-CLAPS_BAND_HEIGHT = 120  # spec 119: was 200, for the smaller 640x360 frame
-CLAPS_BAND_BG_BGR = (0, 0, 0)
-CLAP_TICK_COLOR_BGR = (255, 255, 255)
-CLAP_TICK_HEIGHT = 14
-CLAP_LABEL_ROWS = 4  # cycled so nearby clap labels never overlap
-CLAP_FONT = cv2.FONT_HERSHEY_SIMPLEX
-CLAP_FONT_SCALE = 0.5
-CLAP_FONT_THICKNESS = 1
-CLAP_TEXT_COLOR_BGR = (255, 255, 255)
 
 # Local row within the spectrogram band (0..SPECTROGRAM_HEIGHT) - the
 # user's own spec was "~740px" against the full composite, where the
@@ -119,24 +107,6 @@ def _put_outlined_text(img: np.ndarray, text: str, x: int, y: int, font, scale: 
 def _clamp_text_x(img_width: int, x: int, text: str, font, scale: float, thickness: int) -> int:
     (text_w, _), _ = cv2.getTextSize(text, font, scale, thickness)
     return int(np.clip(x, 0, max(img_width - text_w, 0)))
-
-
-def render_claps_band(width: int, height: int, claps: Sequence[float], duration_s: float) -> np.ndarray:
-    """A short timestamp label per detected clap, positioned along the
-    same time axis as the spectrogram/playhead - not per-frame content,
-    built once per clip and copied into the composite unchanged (see
-    module docstring)."""
-    band = np.zeros((height, width, 3), dtype=np.uint8)
-    band[:] = CLAPS_BAND_BG_BGR
-    for i, t in enumerate(claps):
-        x = _x_for_time(t, duration_s, width)
-        cv2.line(band, (x, 0), (x, CLAP_TICK_HEIGHT), CLAP_TICK_COLOR_BGR, 1, cv2.LINE_AA)
-        row = i % CLAP_LABEL_ROWS
-        y = CLAP_TICK_HEIGHT + (row + 1) * (height - CLAP_TICK_HEIGHT) // (CLAP_LABEL_ROWS + 1)
-        text = f"{t:.2f}"
-        text_x = _clamp_text_x(width, x, text, CLAP_FONT, CLAP_FONT_SCALE, CLAP_FONT_THICKNESS)
-        cv2.putText(band, text, (text_x, y), CLAP_FONT, CLAP_FONT_SCALE, CLAP_TEXT_COLOR_BGR, CLAP_FONT_THICKNESS, cv2.LINE_AA)
-    return band
 
 
 def draw_pair_annotations(
@@ -207,6 +177,7 @@ def compose_annotated_frames(
     on_progress: Optional[Callable[[int, int], None]] = None,
     profiler: Profiler = NULL_PROFILER,
     distance_m: float = PUCK_TRAVEL_DISTANCE_M,
+    hands_json: Optional[Path] = None,
 ) -> bool:
     """Runs pose detection AND spectrogram compositing over an already-
     captured sequence of raw frame files in one pass, writing
@@ -265,43 +236,41 @@ def compose_annotated_frames(
             # playhead, none of this changes frame to frame within one
             # clip - the pair lines get baked directly into `spectrogram`
             # (so every frame's `bottom[:] = spectrogram` below picks
-            # them up for free) and the claps band is built once, not
-            # redrawn per frame.
+            # them up for free). Spec 134: the black claps/timestamp band
+            # under the spectrogram was removed - the spectrogram (with
+            # the shot-to-hit lines and km/h) is all that's added.
             claps = detect_claps(audio, SAMPLE_RATE, distance_m)
             clap_times = [t for t, _peak_rms in claps]
             shots = pair_claps(clap_times, distance_m)
             pairs = [(shot_t, hit_t) for shot_t, hit_t in shots if hit_t is not None]
             draw_pair_annotations(spectrogram, pairs, audio_duration_s, distance_m)
-            claps_band = render_claps_band(width, CLAPS_BAND_HEIGHT, clap_times, audio_duration_s)
 
         # One buffer, reused every frame (spec 092) - was two
         # allocations per frame in the old pipeline (frame.copy() in
         # pose.annotate_frames_dir, np.vstack(...) in
-        # spectrogram.add_spectrograms_to_frames). `top`/`bottom`/
-        # `claps_view` are C-contiguous row-slice VIEWS into `composite`,
+        # spectrogram.add_spectrograms_to_frames). `top`/`bottom`
+        # are C-contiguous row-slice VIEWS into `composite`,
         # not copies - writing into any of them writes directly into
         # `composite`, and cv2 functions operate in place on a
         # C-contiguous view exactly as they would on an owned array of
         # the same shape (asserted in tests/test_compose.py, since a
         # non-contiguous view would make cv2 silently copy and the
         # in-place draw would be lost).
-        composite = np.empty((height + SPECTROGRAM_HEIGHT + CLAPS_BAND_HEIGHT, width, 3), dtype=np.uint8)
+        composite = np.empty((height + SPECTROGRAM_HEIGHT, width, 3), dtype=np.uint8)
         top = composite[:height]
-        bottom = composite[height : height + SPECTROGRAM_HEIGHT]
-        claps_view = composite[height + SPECTROGRAM_HEIGHT :]
-        # Written once, here - the loop below (and composite_into(), see
-        # its own docstring) never touches these rows again.
-        claps_view[:] = claps_band
+        bottom = composite[height:]
 
         have_real_times = frame_times is not None and len(frame_times) == total
 
         with profiler.accum("compose:model_load"):
             detector_cm = PoseDetector()
+        hands_per_frame: list = []  # spec 134: the boxes' hand centres, for "Show stick"
         with detector_cm as detector:
             for i, path in enumerate(frame_paths):
                 with profiler.accum("compose:imread"):
                     frame = cv2.imread(str(path))
                 if frame is None:
+                    hands_per_frame.append(None)
                     if on_progress:
                         on_progress(i + 1, total)
                     continue
@@ -312,6 +281,7 @@ def compose_annotated_frames(
                     # composite_into() draws onto `frame` in place
                     # right after this, so detect() must run first.
                     boxes = detector.detect(frame, ts_ms)
+                hands_per_frame.append(hands_from_boxes(boxes))
                 with profiler.accum("compose:draw+panel"):
                     if have_real_times and audio_duration_s > 0:
                         x_fraction = frame_time_s / audio_duration_s
@@ -322,6 +292,12 @@ def compose_annotated_frames(
                     cv2.imwrite(str(annotated_dir / path.name), composite)
                 if on_progress:
                     on_progress(i + 1, total)
+
+    if hands_json is not None and have_real_times:
+        try:
+            write_hands_sidecar(hands_json, frame_times, hands_per_frame)
+        except OSError:
+            logger.warning("compose_annotated_frames: could not write %s", hands_json, exc_info=True)
 
     logger.info("compose_annotated_frames: composed %d frames in %s", total, annotated_dir)
     return True

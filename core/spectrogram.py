@@ -34,7 +34,7 @@ logger = get_logger("spectrogram")
 # The composited annotated frame stacks three bands - video, this
 # spectrogram+playhead panel, and (spec 098) a claps/puck-speed
 # annotation band below it. core.compose owns the actual 3-band layout
-# (CLAPS_BAND_HEIGHT lives there, not here) - this is just this panel's
+# - this is just this panel's
 # own height, shrunk from 480 in spec 098 to make room for the new band
 # beneath it, same 1280x1200 total either way.
 SPECTROGRAM_HEIGHT = 160  # spec 119: was 280, for the smaller 640x360 frame

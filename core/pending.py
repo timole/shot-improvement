@@ -244,6 +244,7 @@ def process_pending_recording(
                     frame_times=item.frame_times,
                     on_progress=report("Tunnistetaan käsien asentoja ja spektrogrammi"),
                     profiler=profiler, distance_m=item.distance_m,
+                    hands_json=out_dir / f"shot-improvement-{item.timestamp}-hands.json",
                 )
                 # Spec 099: a plain snapshot + speed label per detected
                 # shot, alongside the raw/annotated mp4s.

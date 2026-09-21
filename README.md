@@ -19,8 +19,11 @@ uploaded.
   the puck speed from the rink length. Ignores footsteps and other
   noise.
 - **Annotated video**: yellow boxes on the player's hands (on-device
-  MediaPipe pose model), a spectrogram of the audio, and a band marking
-  each shot with its speed.
+  MediaPipe pose model), a spectrogram of the audio with each shot's speed.
+- **Show stick**: the "Show stick" button under the video draws the
+  stick as a light-green line between the player's two hands - straight
+  when the stick is straight, an arc when it bends - on the frame being
+  viewed, so the bend of a shot can be studied frame by frame.
 - **Shot browser**: right after a recording, a list of the detected
   shots with a picture and speed for each. "Toista raakakuvaa" plays the
   raw frames from two seconds before the shot at 0.25x to 2x speed.

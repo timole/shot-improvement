@@ -58,13 +58,14 @@ class PalmBox:
     label: str
 
 
-def _visible(landmark) -> bool:
+def _visible(landmark, min_visibility: float = VISIBILITY_THRESHOLD) -> bool:
     visibility = getattr(landmark, "visibility", None)
-    return visibility is None or visibility >= VISIBILITY_THRESHOLD
+    return visibility is None or visibility >= min_visibility
 
 
 def palm_boxes_from_landmarks(
-    pose_landmarks_list: Sequence[Sequence[object]], frame_width: int, frame_height: int
+    pose_landmarks_list: Sequence[Sequence[object]], frame_width: int, frame_height: int,
+    min_visibility: float = VISIBILITY_THRESHOLD,
 ) -> list[PalmBox]:
     """Pure function (no model/camera needed) - takes MediaPipe's own
     pose_landmarks result shape (one list of 33 landmarks per detected
@@ -73,7 +74,7 @@ def palm_boxes_from_landmarks(
     for landmarks in pose_landmarks_list:
         for wrist_i, pinky_i, index_i, label in PALM_LANDMARKS:
             w, p, idx = landmarks[wrist_i], landmarks[pinky_i], landmarks[index_i]
-            if not (_visible(w) and _visible(p) and _visible(idx)):
+            if not (_visible(w, min_visibility) and _visible(p, min_visibility) and _visible(idx, min_visibility)):
                 continue
             cx = (w.x + p.x + idx.x) / 3 * frame_width
             cy = (w.y + p.y + idx.y) / 3 * frame_height

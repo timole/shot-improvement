@@ -25,6 +25,7 @@ from PIL import Image, ImageTk
 
 from core import azure_sync, cloud_sync, devices, pending
 from core.status_publish import StatusPublisher
+from core.stick import HandsTrack, StickAnnotator, draw_stick, hands_sidecar_path
 from core.claps import DEFAULT_SHOT_POSITION, SHOT_POSITIONS
 from core.compose import ShotImage, select_shot_frame_range
 from core.log_setup import get_logger, setup_logging
@@ -175,6 +176,23 @@ class App:
 
         self.preview_label = tk.Label(self.center_frame, background="#000")
         self.preview_label.pack(padx=8, pady=8)
+        # Spec 134: "Show stick" - draws the stick (a light-green line/arc
+        # between the two hands) on recorded frames, below the video.
+        self._stick_annotator: Optional[StickAnnotator] = None
+        self._stick_raw_cap = None  # raw sibling of the annotated clip being played
+        self._stick_raw_path: Optional[Path] = None
+        self._stick_raw_next = 0
+        self._stick_hands: Optional[HandsTrack] = None
+        self._stick_hands_path: Optional[Path] = None
+        self.stick_var = tk.BooleanVar(value=False)
+        self.stick_status_var = tk.StringVar(value="")
+        stick_row = ttk.Frame(self.center_frame)
+        stick_row.pack(fill="x", padx=8, pady=(0, 4))
+        ttk.Checkbutton(
+            stick_row, text="Show stick", variable=self.stick_var, style="Toolbutton",
+            command=self.on_stick_toggled,
+        ).pack(side="left")
+        ttk.Label(stick_row, textvariable=self.stick_status_var, foreground="#555").pack(side="left", padx=(8, 0))
         # Spec 125: shown only while a still image is open from the list.
         self.image_back_button = ttk.Button(
             self.center_frame, text="Takaisin livekuvaan", command=lambda: self._exit_image_mode(),
@@ -654,7 +672,98 @@ class App:
             # percentage.
             self.status_var.set("Käsitellään tallennetta…")
 
+    def _with_stick(self, frame):
+        """Spec 134: returns a copy of `frame` with the stick drawn on its
+        video part (the top FRAME_HEIGHT rows - annotated clips and shot
+        images have a spectrogram below the video); sets the status text."""
+        if frame.shape[1] != FRAME_WIDTH or frame.shape[0] < FRAME_HEIGHT:
+            return frame
+        try:
+            if self._stick_annotator is None:
+                self._stick_annotator = StickAnnotator()
+            frame = frame.copy()
+            # The stick is searched in the RAW frame when one is at hand
+            # (an annotated clip's yellow boxes cover the hands and break
+            # the pose detection), then drawn onto what's shown.
+            raw = self._raw_frame_for_current_playback_frame()
+            if raw is not None:
+                arc = self._stick_annotator.find(raw, self._sidecar_hands_for_current_playback_frame())
+                if arc is not None:
+                    draw_stick(frame[:FRAME_HEIGHT], arc)
+            else:
+                arc = self._stick_annotator.annotate(frame[:FRAME_HEIGHT])
+        except Exception:
+            logger.exception("_with_stick: failed")
+            self.stick_status_var.set("Mailan piirto epäonnistui.")
+            return frame
+        if arc is None:
+            self.stick_status_var.set("Molempia käsiä ei tunnistettu.")
+        elif arc.bent:
+            self.stick_status_var.set(f"Maila taipuu ~{abs(arc.bend_px):.0f} px")
+        else:
+            self.stick_status_var.set("Maila on suora")
+        return frame
+
+    def _raw_frame_for_current_playback_frame(self):
+        """While an annotated clip (the -annotated.mp4) plays: the same frame
+        of its raw sibling clip (the plain .mp4 next to it, same frame count/timing), else None."""
+        player = self._player
+        if self._mode != "playback" or player is None or not player.path.name.endswith("-annotated.mp4"):
+            return None
+        raw_path = player.path.with_name(player.path.name.replace("-annotated.mp4", ".mp4"))
+        if not raw_path.exists():
+            return None
+        if self._stick_raw_path != raw_path:
+            self._close_stick_raw()
+            self._stick_raw_cap = cv2.VideoCapture(str(raw_path))
+            self._stick_raw_path = raw_path
+            self._stick_raw_next = 0
+        index = player._decode_pos - 1  # the frame just shown
+        if index != self._stick_raw_next:
+            self._stick_raw_cap.set(cv2.CAP_PROP_POS_FRAMES, max(index, 0))
+        ok, raw = self._stick_raw_cap.read()
+        self._stick_raw_next = max(index, 0) + 1
+        return raw if ok else None
+
+    def _sidecar_hands_for_current_playback_frame(self):
+        """The hand centres the yellow boxes were drawn at for the frame
+        just shown (from the "-hands.json" written by the annotation
+        pass), or None for clips annotated before that existed."""
+        player = self._player
+        if player is None:
+            return None
+        if self._stick_hands_path != player.path:
+            self._stick_hands = HandsTrack.load(hands_sidecar_path(player.path))
+            self._stick_hands_path = player.path
+        if self._stick_hands is None:
+            return None
+        return self._stick_hands.at(max(player._decode_pos - 1, 0) / player.fps)
+
+    def _close_stick_raw(self) -> None:
+        if self._stick_raw_cap is not None:
+            self._stick_raw_cap.release()
+        self._stick_raw_cap = None
+        self._stick_raw_path = None
+
+    def on_stick_toggled(self) -> None:
+        """Redraws the frame currently on screen with/without the stick."""
+        if not self.stick_var.get():
+            self.stick_status_var.set("")
+        if self._mode == "playback":
+            self._show_current_player_frame()
+        elif self._mode == "shots":
+            if self._raw_window is not None:
+                self._raw_show_frame(self._raw_frame_pos)
+            else:
+                selection = self.shots_tree.selection()
+                if selection:
+                    self._show_shot(int(selection[0]))
+        elif self.stick_var.get():
+            self.stick_status_var.set("Avaa tallenne tai laukaus nähdäksesi mailan.")
+
     def _show_frame(self, frame) -> None:
+        if self.stick_var.get() and self._mode in ("playback", "shots"):
+            frame = self._with_stick(frame)
         # Always DISPLAY_SIZE[0] wide, with the height following the
         # frame's own aspect (spec 125): an annotated frame is taller
         # than a raw one (spectrogram + claps bands under the video),
@@ -1491,6 +1600,7 @@ class App:
         self._update_scrub_and_time()
 
     def _close_player(self) -> None:
+        self._close_stick_raw()
         if self._player is not None:
             self._player.close()
             self._player = None
@@ -1500,6 +1610,8 @@ class App:
     def on_close(self) -> None:
         logger.info("Window closing")
         self._close_player()
+        if self._stick_annotator is not None:
+            self._stick_annotator.close()
         if self._background_remover is not None:
             self._background_remover.close()
         if self.session is not None:
