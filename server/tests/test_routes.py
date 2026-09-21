@@ -393,3 +393,10 @@ def test_app_apk_returns_503_on_other_azure_failures(monkeypatch: pytest.MonkeyP
     monkeypatch.setattr("server.main.blob_videos.read_apk", _boom)
 
     assert client.get("/app.apk").status_code == 503
+
+
+def test_page_shell_scripts_and_install_page_are_revalidated_not_heuristically_cached() -> None:
+    # No Cache-Control let a phone keep serving an old app.js (no new
+    # banner) for hours - these change per deploy without a versioned URL.
+    for path in ("/", "/app.js", "/android"):
+        assert client.get(path).headers["cache-control"] == "no-cache", path

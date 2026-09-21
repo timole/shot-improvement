@@ -42,6 +42,12 @@ STATE_COOKIE_NAME = "shot_oauth_state"
 # headers for it).
 REDIRECT_URI = "https://shot.timolehtonen.tech/api/login/callback"
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
+# The page shell, app.js and the install page change with every deploy but
+# have no fingerprint in their URL. Without Cache-Control a browser may
+# reuse its copy for hours or days by heuristic (a phone kept showing the
+# page without a new banner). no-cache = always revalidate; the ETag keeps
+# that to a tiny 304.
+REVALIDATE = {"Cache-Control": "no-cache"}
 
 
 def _session_email(request: Request) -> Optional[str]:
@@ -232,19 +238,19 @@ def preview_bytes(name: str, request: Request) -> FileResponse:
 
 @app.get("/")
 def index_page() -> FileResponse:
-    return FileResponse(WEB_DIR / "index.html")
+    return FileResponse(WEB_DIR / "index.html", headers=REVALIDATE)
 
 
 @app.get("/app.js")
 def app_js() -> FileResponse:
-    return FileResponse(WEB_DIR / "app.js", media_type="text/javascript")
+    return FileResponse(WEB_DIR / "app.js", media_type="text/javascript", headers=REVALIDATE)
 
 
 @app.get("/android")
 def android_page() -> FileResponse:
     """Spec 136: public install page for the Android app (no sign-in - the
     phone's browser has to be able to fetch the APK)."""
-    return FileResponse(WEB_DIR / "android.html")
+    return FileResponse(WEB_DIR / "android.html", headers=REVALIDATE)
 
 
 @app.get("/app.apk")
