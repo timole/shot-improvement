@@ -152,6 +152,7 @@ class App:
         self._shot_frame_cache: dict[int, tuple[list[Path], list[float], int]] = {}
         self._raw_playing = False
         self._raw_play_after_id: Optional[str] = None
+        self._default_device_labels: Optional[tuple[str, str, str]] = None
         self._raw_frame_pos = 0
         self._raw_window: Optional[tuple[list[Path], list[float]]] = None  # selected shot's frames (paths, times)
         self._raw_scrubbing = False  # user is dragging the raw slider
@@ -312,6 +313,11 @@ class App:
             pending_row, text="Käsittele odottavat", command=self.on_process_pending_click, state="disabled",
         )
         self.process_pending_button.pack(side="left", padx=(8, 0))
+
+        # Spec 133: back to the state of a fresh start.
+        reset_row = ttk.Frame(root)
+        reset_row.pack(pady=(0, 4))
+        ttk.Button(reset_row, text="Palauta oletukset", command=self.on_reset_click).pack(side="left")
 
     def _build_playback_controls(self, controls_root: tk.Tk, timeline_root: tk.Tk) -> None:
         # Both hidden (not packed) while mode == "live"; shown together
@@ -501,6 +507,8 @@ class App:
             return
 
         self._populate_device_combos()
+        # Spec 133: what a fresh start picked - "Palauta oletukset" returns to it.
+        self._default_device_labels = (self.camera_var.get(), self.mic_var.get(), self.speaker_var.get())
         self._update_camera_info()
         self.status_var.set("Valmis.")
         self.record_button.config(state="normal")
@@ -1328,6 +1336,56 @@ class App:
         if self.session is not None:
             self.record_button.config(state="normal")
         self.status_var.set("Valmis.")
+
+    def on_reset_click(self) -> None:
+        """Spec 133: resets every setting to its default and returns to the
+        live camera preview - as if the app had just been restarted."""
+        if self.session is None or self.session.is_recording or self._counting_down:
+            self.status_var.set("Palautus ei onnistu kesken tallennuksen.")
+            return
+        logger.info("User clicked Palauta oletukset")
+        # Leave whatever is on screen (saved-clip playback, shot list, a
+        # still image) and go back to live view.
+        self._stop_raw_playback()
+        if self._mode == "playback":
+            self.on_back_to_live_click()
+        self._exit_shots_mode()
+        self._exit_image_mode()
+        self._shots = []
+        self._shot_source = None
+        self._shot_frame_cache = {}
+        self._raw_window = None
+        self._raw_frame_pos = 0
+        self.shots_tree.delete(*self.shots_tree.get_children())
+        self.shot_speed_var.set("")
+        self.raw_time_var.set("")
+        self.tree.selection_remove(*self.tree.selection())
+
+        # Settings.
+        self.duration_var.set(str(DEFAULT_DURATION_S))
+        self.defer_processing_var.set(True)
+        self.shot_position_var.set(DEFAULT_SHOT_POSITION.label)
+        self.raw_speed_var.set(_speed_label(1.0))
+        self.speed_var.set(_speed_label(1.0))
+        self.volume_var.set(1.0)
+        self.mute_var.set(False)
+        self.loop_var.set(False)
+
+        # Devices: back to what a fresh start picks (only touched if they differ).
+        if self._default_device_labels is not None:
+            camera, mic, speaker = self._default_device_labels
+            if self.camera_var.get() != camera:
+                self.camera_var.set(camera)
+                self.on_camera_selected()
+            if self.mic_var.get() != mic:
+                self.mic_var.set(mic)
+                self.on_mic_selected()
+            if self.speaker_var.get() != speaker:
+                self.speaker_var.set(speaker)
+                self.on_speaker_selected()
+
+        self.record_button.config(state="normal")
+        self.status_var.set("Oletukset palautettu.")
 
     def on_remove_background_click(self) -> None:
         # Only the currently-displayed frame - pausing first so the
