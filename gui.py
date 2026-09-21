@@ -65,12 +65,14 @@ COUNTDOWN_BEEP_MS = 150
 # version of this same idea).
 SLOW_TICK_WARN_THRESHOLD_S = 1.0
 
-_FILENAME_TIMESTAMP_RE = re.compile(r"shot-improvement-(\d{14})(?:-annotated)?\.mp4$")
+_FILENAME_TIMESTAMP_RE = re.compile(r"shot-improvement-(\d{14})(?:-annotated|-shot-\d+)?\.(?:mp4|jpg)$")
 
 # Spec 108: raw shot preview's own speed choices - deliberately not
 # core.playback.SPEED_OPTIONS (which includes 1.5x) - the user asked
 # for exactly these four.
 RAW_SHOT_SPEED_OPTIONS = (0.25, 0.5, 1.0, 2.0)
+RAW_PLAY_TEXT = "▶ Toista raakakuvaa"
+RAW_PAUSE_TEXT = "❚❚ Pysäytä"
 
 
 def _device_choices(raw_devices: list[dict]) -> list[str]:
@@ -93,6 +95,14 @@ _RAW_SHOT_SPEED_LABELS = [_speed_label(s) for s in RAW_SHOT_SPEED_OPTIONS]
 
 def _raw_shot_speed_from_label(label: str) -> float:
     return RAW_SHOT_SPEED_OPTIONS[_RAW_SHOT_SPEED_LABELS.index(label)]
+
+
+def _recording_timestamp(path: Path) -> str:
+    """The 14-digit timestamp in a recording file's name - lets a
+    recording's mp4s and shot images sort together (stable sort keeps
+    name order within one recording)."""
+    match = re.search(r"(\d{14})", path.name)
+    return match.group(1) if match else ""
 
 
 def _created_label(path: Path) -> str:
@@ -124,7 +134,6 @@ class App:
         self._segmenting = False  # a background-removal worker thread is currently running
         self._photo_image = None  # keep a reference alive - Tkinter/PhotoImage gotcha
         self._counting_down = False  # the 3-2-1 countdown is running, before actual capture starts
-        self._display_size = DISPLAY_SIZE
         # Spec 093: "Vain nauhoitus" (recording only) mode - see
         # _build_record_row for the checkbox and on_process_pending_click
         # for the queue this list feeds.
@@ -143,6 +152,9 @@ class App:
         self._raw_playing = False
         self._raw_play_after_id: Optional[str] = None
         self._raw_frame_pos = 0
+        self._raw_window: Optional[tuple[list[Path], list[float]]] = None  # selected shot's frames (paths, times)
+        self._raw_scrubbing = False  # user is dragging the raw slider
+        self._raw_scale_setting = False  # slider is being moved by code, not the user
 
         # Two columns: left_frame holds every control (camera/device
         # pickers, record row, transport buttons, speed/volume/
@@ -161,10 +173,15 @@ class App:
 
         self.preview_label = tk.Label(self.center_frame, background="#000")
         self.preview_label.pack(padx=8, pady=8)
+        # Spec 125: shown only while a still image is open from the list.
+        self.image_back_button = ttk.Button(
+            self.center_frame, text="Takaisin livekuvaan", command=lambda: self._exit_image_mode(),
+        )
 
         self._build_record_row(self.left_frame)
         self._build_playback_controls(self.left_frame, self.center_frame)
         self._build_shots_list(self.left_frame)
+        self._build_raw_controls(self.center_frame)
 
         self.status_var = tk.StringVar(value="Käynnistetään kameraa…")
         self.status_label = ttk.Label(self.left_frame, textvariable=self.status_var)
@@ -388,23 +405,13 @@ class App:
         self.shots_frame = ttk.Frame(timeline_root)
         ttk.Label(self.shots_frame, text="Laukaukset:").pack(anchor="w", padx=8)
 
-        # Spec 107/108: the currently-shown shot's speed as text, and a
-        # play/pause toggle that steps through the shot's raw BMP
-        # frames directly in preview_label (no encoding, no audio) -
-        # see on_raw_shot_play_pause_click.
+        # Spec 107/108/125: the currently-shown shot's speed as text; the
+        # raw-frame player's controls live under the video (see
+        # _build_raw_controls).
         speed_row = ttk.Frame(self.shots_frame)
         speed_row.pack(fill="x", padx=8, pady=(0, 4))
         self.shot_speed_var = tk.StringVar(value="")
         ttk.Label(speed_row, textvariable=self.shot_speed_var).pack(side="left")
-        self.shot_play_button = ttk.Button(
-            speed_row, text="▶ Toista raakakuvaa", command=self.on_raw_shot_play_pause_click,
-        )
-        self.shot_play_button.pack(side="left", padx=(12, 0))
-        self.raw_speed_var = tk.StringVar(value=_speed_label(1.0))
-        ttk.Combobox(
-            speed_row, textvariable=self.raw_speed_var, state="readonly", width=6,
-            values=_RAW_SHOT_SPEED_LABELS,
-        ).pack(side="left", padx=(8, 0))
 
         inner = ttk.Frame(self.shots_frame)
         inner.pack(fill="both", expand=True, padx=8, pady=(0, 4))
@@ -423,6 +430,41 @@ class App:
         ttk.Button(self.shots_frame, text="Takaisin livekuvaan", command=self._exit_shots_mode).pack(
             anchor="w", padx=8, pady=(0, 8)
         )
+
+    def _build_raw_controls(self, root) -> None:
+        """Spec 125: controls for stepping through / playing the selected
+        shot's raw frames, under the video on the right: -1/+1 frame,
+        play/pause ("Toista raakakuvaa"), a slider over the shot's
+        frames, the frame number + time, and the speed. Packed only in
+        shots mode (see _on_shots_ready)."""
+        self.raw_controls_frame = ttk.Frame(root)
+        buttons = ttk.Frame(self.raw_controls_frame)
+        buttons.pack(fill="x")
+        ttk.Button(buttons, text="-1 ruutu", width=8, command=lambda: self._raw_step(-1)).pack(side="left", padx=1)
+        self.shot_play_button = ttk.Button(
+            buttons, text=RAW_PLAY_TEXT, command=self.on_raw_shot_play_pause_click,
+        )
+        self.shot_play_button.pack(side="left", padx=1)
+        ttk.Button(buttons, text="+1 ruutu", width=8, command=lambda: self._raw_step(1)).pack(side="left", padx=1)
+        ttk.Label(buttons, text="Nopeus:").pack(side="left", padx=(12, 0))
+        self.raw_speed_var = tk.StringVar(value=_speed_label(1.0))
+        ttk.Combobox(
+            buttons, textvariable=self.raw_speed_var, state="readonly", width=6,
+            values=_RAW_SHOT_SPEED_LABELS,
+        ).pack(side="left", padx=(4, 0))
+
+        slider_row = ttk.Frame(self.raw_controls_frame)
+        slider_row.pack(fill="x", pady=(4, 0))
+        self.raw_scrub_var = tk.DoubleVar(value=0.0)
+        self.raw_scale = ttk.Scale(
+            slider_row, from_=0.0, to=1.0, variable=self.raw_scrub_var, orient="horizontal",
+            command=self._on_raw_scale_moved,
+        )
+        self.raw_scale.pack(side="left", fill="x", expand=True)
+        self.raw_scale.bind("<ButtonPress-1>", lambda _e: setattr(self, "_raw_scrubbing", True))
+        self.raw_scale.bind("<ButtonRelease-1>", lambda _e: setattr(self, "_raw_scrubbing", False))
+        self.raw_time_var = tk.StringVar(value="")
+        ttk.Label(slider_row, textvariable=self.raw_time_var, width=22).pack(side="left", padx=(8, 0))
 
     def _apply_layout(self) -> None:
         """Two columns side by side: controls, then the recordings
@@ -531,7 +573,7 @@ class App:
                 pass
             elif self._mode == "playback":
                 self._playback_tick()
-            elif self._mode == "shots":
+            elif self._mode in ("shots", "image"):
                 # Nothing to do each tick - the displayed shot image is
                 # static until the user picks another row or leaves
                 # shots mode (see _exit_shots_mode), same idea as
@@ -590,8 +632,14 @@ class App:
             self.status_var.set("Käsitellään tallennetta…")
 
     def _show_frame(self, frame) -> None:
-        target_w, target_h = self._display_size
-        if frame.shape[1] != target_w or frame.shape[0] != target_h:
+        # Always DISPLAY_SIZE[0] wide, with the height following the
+        # frame's own aspect (spec 125): an annotated frame is taller
+        # than a raw one (spectrogram + claps bands under the video),
+        # and a fixed 640x360 box used to squash it.
+        h, w = frame.shape[:2]
+        target_w = DISPLAY_SIZE[0]
+        target_h = round(target_w * h / w)
+        if w != target_w or h != target_h:
             frame = cv2.resize(frame, (target_w, target_h), interpolation=cv2.INTER_AREA)
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         image = Image.fromarray(rgb)
@@ -615,6 +663,7 @@ class App:
             )
             return
         self._exit_shots_mode()
+        self._exit_image_mode()
         try:
             duration_s = float(self.duration_var.get())
         except ValueError:
@@ -769,9 +818,11 @@ class App:
         for shot in shots:
             speed_label = f"{round(shot.speed_kmh)} km/h" if shot.speed_kmh is not None else "—"
             self.shots_tree.insert("", "end", iid=str(shot.index - 1), text=f"Laukaus {shot.index}", values=(speed_label,))
+        self._exit_image_mode()
         self._mode = "shots"
         # Left column, just above the recordings list.
         self.shots_frame.pack(fill="x", before=self.list_frame)
+        self.raw_controls_frame.pack(fill="x", padx=8, pady=(0, 8))
         self.shots_tree.selection_set("0")
 
     def on_shot_selected(self, _event=None) -> None:
@@ -780,6 +831,9 @@ class App:
             return
         self._stop_raw_playback()
         self._raw_frame_pos = 0
+        self._raw_window = None
+        self._set_raw_scale(0, 1)
+        self.raw_time_var.set("")
         self._show_shot(int(selection[0]))
 
     def _show_shot(self, index: int) -> None:
@@ -787,8 +841,6 @@ class App:
         frame = cv2.imread(str(shot.path))
         if frame is None:
             return
-        h, w = frame.shape[:2]
-        self._display_size = (640, round(640 * h / w))
         self._show_frame(frame)
         speed_label = f"{round(shot.speed_kmh)} km/h" if shot.speed_kmh is not None else "ei laskettavissa"
         self.shot_speed_var.set(f"Nopeus: {speed_label}")
@@ -798,7 +850,7 @@ class App:
             return
         self._stop_raw_playback()
         self.shots_frame.pack_forget()
-        self._display_size = DISPLAY_SIZE
+        self.raw_controls_frame.pack_forget()
         self._mode = "live"
         self.status_var.set("Valmis.")
 
@@ -836,34 +888,85 @@ class App:
         self._shot_frame_cache[index] = result
         return result
 
+    def _selected_raw_window(self) -> Optional[tuple[list[Path], list[float]]]:
+        """The selected shot's raw frames (paths, times), loaded once
+        and reused; None (with a status message) if unavailable."""
+        if self._raw_window is not None:
+            return self._raw_window
+        selection = self.shots_tree.selection()
+        if not selection:
+            return None
+        paths, times = self._shot_frames(int(selection[0]))
+        if not paths:
+            self._set_status_if_idle("Raakadataa ei ole enää saatavilla tälle laukaukselle.")
+            return None
+        self._raw_window = (paths, times)
+        self._set_raw_scale(self._raw_frame_pos, len(paths) - 1)
+        return self._raw_window
+
+    def _set_raw_scale(self, pos: int, last: int) -> None:
+        self._raw_scale_setting = True
+        try:
+            self.raw_scale.config(to=max(last, 1))
+            self.raw_scrub_var.set(pos)
+        finally:
+            self._raw_scale_setting = False
+
+    def _raw_show_frame(self, pos: int) -> None:
+        """Shows frame `pos` of the selected shot's window and syncs the
+        slider and the frame/time label."""
+        window = self._raw_window
+        if window is None:
+            return
+        paths, times = window
+        pos = max(0, min(len(paths) - 1, pos))
+        self._raw_frame_pos = pos
+        frame = cv2.imread(str(paths[pos]))
+        if frame is not None:
+            self._show_frame(frame)
+        if not self._raw_scrubbing:
+            self._raw_scale_setting = True
+            try:
+                self.raw_scrub_var.set(pos)
+            finally:
+                self._raw_scale_setting = False
+        self.raw_time_var.set(f"ruutu {pos + 1}/{len(paths)}  {times[pos]:.2f} s")
+
+    def _raw_step(self, delta: int) -> None:
+        """One frame back/forward (pauses playback)."""
+        self._stop_raw_playback()
+        if self._selected_raw_window() is None:
+            return
+        self._raw_show_frame(self._raw_frame_pos + delta)
+
+    def _on_raw_scale_moved(self, value: str) -> None:
+        if self._raw_scale_setting or not self._raw_scrubbing:
+            return
+        if self._raw_playing:
+            self._stop_raw_playback()
+        if self._selected_raw_window() is None:
+            return
+        self._raw_show_frame(round(float(value)))
+
     def on_raw_shot_play_pause_click(self) -> None:
         if self._raw_playing:
             self._stop_raw_playback()
             return
-        selection = self.shots_tree.selection()
-        if not selection:
+        window = self._selected_raw_window()
+        if window is None:
             return
-        index = int(selection[0])
-        paths, times = self._shot_frames(index)
-        if not paths:
-            self._set_status_if_idle("Raakadataa ei ole enää saatavilla tälle laukaukselle.")
-            return
+        paths, times = window
         if self._raw_frame_pos >= len(paths) - 1:
             self._raw_frame_pos = 0
         self._raw_playing = True
-        self.shot_play_button.config(text="❚❚ Pysäytä")
+        self.shot_play_button.config(text=RAW_PAUSE_TEXT)
         self._raw_playback_tick(paths, times)
 
     def _raw_playback_tick(self, paths: list[Path], times: list[float]) -> None:
-        frame = cv2.imread(str(paths[self._raw_frame_pos]))
-        if frame is not None:
-            # Raw frames have no spectrogram strip: show at native size
-            # (the shot image's taller size is restored on selection).
-            self._display_size = (frame.shape[1], frame.shape[0])
-            self._show_frame(frame)
+        self._raw_show_frame(self._raw_frame_pos)
         if self._raw_frame_pos >= len(paths) - 1:
             self._raw_playing = False
-            self.shot_play_button.config(text="▶ Toista raakakuvaa")
+            self.shot_play_button.config(text=RAW_PLAY_TEXT)
             return
         speed = _raw_shot_speed_from_label(self.raw_speed_var.get())
         gap_s = times[self._raw_frame_pos + 1] - times[self._raw_frame_pos]
@@ -876,7 +979,7 @@ class App:
             self.root.after_cancel(self._raw_play_after_id)
             self._raw_play_after_id = None
         self._raw_playing = False
-        self.shot_play_button.config(text="▶ Toista raakakuvaa")
+        self.shot_play_button.config(text=RAW_PLAY_TEXT)
 
     def _on_sync_reconciled(self, exc: Optional[Exception]) -> None:
         if exc is not None:
@@ -957,7 +1060,11 @@ class App:
 
     def refresh_recordings(self) -> None:
         RECORDINGS_DIR.mkdir(parents=True, exist_ok=True)
-        self._video_paths = sorted(RECORDINGS_DIR.glob("*.mp4"), reverse=True)
+        # Spec 125: the per-shot snapshot JPEGs are listed too, right
+        # after their recording's videos (newest recording first).
+        paths = list(RECORDINGS_DIR.glob("*.mp4")) + list(RECORDINGS_DIR.glob("*-shot-*.jpg"))
+        paths.sort(key=lambda p: p.name)
+        self._video_paths = sorted(paths, key=_recording_timestamp, reverse=True)
         self.tree.delete(*self.tree.get_children())
         for i, path in enumerate(self._video_paths):
             self.tree.insert("", "end", iid=str(i), text=path.name, values=(_created_label(path),))
@@ -989,7 +1096,8 @@ class App:
             else:
                 self.status_var.set("Poistettu myös verkosta.")
 
-        self._sync_worker.delete_recording(path.name, on_done=on_sync_done)
+        if path.suffix.lower() == ".mp4":  # shot images aren't synced to the cloud
+            self._sync_worker.delete_recording(path.name, on_done=on_sync_done)
 
     # --- native playback (same preview area, no external player) -------
     #
@@ -1003,7 +1111,33 @@ class App:
         path = self._selected_path()
         if path is None:
             return
+        if path.suffix.lower() == ".jpg":
+            self.show_still_image(path)
+            return
         self.load_and_play(path)
+
+    def show_still_image(self, path: Path) -> None:
+        """Spec 125: a captured shot image picked from the recordings
+        list is shown in the preview area (mode "image": static, like
+        "shots"); "Takaisin livekuvaan" or a new recording leaves it."""
+        if self.session is None or self.session.is_recording or self._counting_down or self._mode == "playback":
+            return
+        frame = cv2.imread(str(path))
+        if frame is None:
+            self.status_var.set(f"Kuvan avaaminen epäonnistui: {path.name}")
+            return
+        self._exit_shots_mode()
+        self._mode = "image"
+        self._show_frame(frame)
+        self.image_back_button.pack(anchor="w", padx=8, pady=(0, 8))
+        self.status_var.set(f"Kuva: {path.name}")
+
+    def _exit_image_mode(self) -> None:
+        if self._mode != "image":
+            return
+        self.image_back_button.pack_forget()
+        self._mode = "live"
+        self.status_var.set("Valmis.")
 
     def load_and_play(self, path: Path) -> None:
         logger.info("Loading %s for playback", path.name)
@@ -1014,6 +1148,7 @@ class App:
             )
             return
         self._exit_shots_mode()
+        self._exit_image_mode()
         self._close_player()
         self.status_var.set(f"Ladataan: {path.name}…")
         self.root.update_idletasks()
