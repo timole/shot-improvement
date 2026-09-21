@@ -250,6 +250,7 @@ def test_shot_positions_distances_and_default() -> None:
         "blue_line": pytest.approx(18.5),
         "blue_line_goal_back": pytest.approx(19.62),
         "blue_line_to_end": pytest.approx(22.5),
+        "attack_dots": pytest.approx(6.0),
         "red_line": pytest.approx(26.0),
         "other_blue_line": pytest.approx(33.5),
         "faceoff_dots": pytest.approx(46.0),
