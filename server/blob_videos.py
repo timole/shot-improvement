@@ -20,6 +20,7 @@ from __future__ import annotations
 import os
 import re
 import tempfile
+import uuid
 from datetime import datetime
 from pathlib import Path
 
@@ -112,16 +113,24 @@ def get_cached_path(name: str) -> Path:
     azure.core.exceptions.ResourceNotFoundError if the blob doesn't
     exist.
 
-    Downloads to a temporary '<name>.part' path and atomically renames
-    it into place, rather than writing straight to the final cache
-    path - a second concurrent request (a video player firing several
-    parallel Range requests at once against a cold cache hits this
-    routinely) must never be able to serve a half-written file."""
+    Downloads to a temporary, uuid-suffixed tmp path and atomically
+    renames it into place, rather than writing straight to the final
+    cache path - a second concurrent request (a video player firing
+    several parallel Range requests at once against a cold cache hits
+    this routinely) must never be able to serve a half-written file.
+    The tmp path is unique per call, not just '<name>.part' - two
+    concurrent misses used to be able to open() the SAME tmp path and
+    interleave their writes into it (whichever finished first would
+    rename the corrupt result into place; the other would then fail to
+    rename its own now-vanished tmp path, an exception easy for a
+    caller to swallow as "this video doesn't exist"). A unique tmp path
+    per call means concurrent downloads of the same file are merely
+    redundant, never corrupting."""
     _CACHE_DIR.mkdir(parents=True, exist_ok=True)
     path = _CACHE_DIR / name
     if path.exists():
         return path
-    tmp_path = path.with_name(path.name + ".part")
+    tmp_path = path.with_name(f"{path.name}.{uuid.uuid4().hex}.part")
     with open(tmp_path, "wb") as f:
         _container().get_blob_client(name).download_blob().readinto(f)
     tmp_path.replace(path)

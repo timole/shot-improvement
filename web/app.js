@@ -124,38 +124,64 @@ function HomeLink() {
 // no paired hit). Tapping a card opens AndroidShotDetail - the download
 // links spec 147 originally put directly on the card moved into that
 // dialog (see its own "Lataa" buttons).
+// Spec 155: paged rather than rendering every shot at once - each row's
+// <img> fires its own network request (a cache miss means the server
+// runs ffmpeg to build it), so a page with hundreds of accumulated
+// shots was issuing hundreds of concurrent thumbnail requests on every
+// load, which is both what made the page feel slow and what made the
+// server-side download race (see android_blobs.get_cached_path) easy
+// to trigger in the first place. visibleCount only grows via the
+// button below, so polling for new shots (AndroidPage's own effect)
+// never collapses a list the user has already expanded.
+const ANDROID_PAGE_SIZE = 20;
+
 function AndroidShotList({ shots, onSelect }) {
+  const [visibleCount, setVisibleCount] = useState(ANDROID_PAGE_SIZE);
   if (shots.length === 0) {
     return <p className="text-muted">Ei vielä puhelimen tallenteita.</p>;
   }
+  const visible = shots.slice(0, visibleCount);
   return (
-    <div className="list-group">
-      {shots.map((s) => (
-        <div
-          className="list-group-item list-group-item-action d-flex align-items-center gap-2 py-1"
-          role="button"
-          key={s.stem}
-          onClick={() => onSelect(s.stem)}
-        >
-          <img
-            className="bg-dark rounded flex-shrink-0"
-            src={`/api/android/thumbnail/${s.stem}`}
-            alt=""
-            loading="lazy"
-            width={32}
-            height={32}
-            style={{ width: 32, height: 32, objectFit: "cover" }}
-          />
-          <div className="flex-grow-1 small text-truncate">
-            <span className="text-muted me-2">{formatRecordedAt(s.recorded_at)}</span>
-            <span className="fw-semibold me-2">
-              {s.speed_kmh != null ? `${Math.round(s.speed_kmh)} km/h` : "Osumaa ei kuulunut."}
-            </span>
-            {s.place && <span className="text-muted">{s.place}</span>}
+    <>
+      <div className="list-group">
+        {visible.map((s) => (
+          <div
+            className="list-group-item list-group-item-action d-flex align-items-center gap-2 py-1"
+            role="button"
+            key={s.stem}
+            onClick={() => onSelect(s.stem)}
+          >
+            <img
+              className="bg-dark rounded flex-shrink-0"
+              src={`/api/android/thumbnail/${s.stem}`}
+              alt=""
+              loading="lazy"
+              width={32}
+              height={32}
+              style={{ width: 32, height: 32, objectFit: "cover" }}
+            />
+            <div className="flex-grow-1 small text-truncate">
+              <span className="text-muted me-2">{formatRecordedAt(s.recorded_at)}</span>
+              <span className="fw-semibold me-2">
+                {s.speed_kmh != null ? `${Math.round(s.speed_kmh)} km/h` : "Osumaa ei kuulunut."}
+              </span>
+              {s.place && <span className="text-muted">{s.place}</span>}
+            </div>
           </div>
+        ))}
+      </div>
+      {visibleCount < shots.length && (
+        <div className="text-center mt-3">
+          <button
+            type="button"
+            className="btn btn-outline-secondary btn-sm"
+            onClick={() => setVisibleCount((c) => c + ANDROID_PAGE_SIZE)}
+          >
+            Näytä lisää ({shots.length - visibleCount} jäljellä)
+          </button>
         </div>
-      ))}
-    </div>
+      )}
+    </>
   );
 }
 

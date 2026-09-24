@@ -27,6 +27,7 @@ import json
 import os
 import re
 import tempfile
+import uuid
 from datetime import datetime
 from pathlib import Path
 
@@ -167,7 +168,18 @@ def get_cached_path(stem: str, extension: str) -> Path:
     path = _CACHE_DIR / filename
     if path.exists():
         return path
-    tmp_path = path.with_name(path.name + ".part")
+    # Unique per call, not just "<name>.part" - two concurrent misses
+    # for the SAME file (a thumbnail request and a compose_video
+    # request both landing on a stem's first view, say) would otherwise
+    # both open() the identical tmp path and interleave their writes
+    # into it. Whichever finishes first renames it into place; the
+    # other then tries to rename a tmp path that no longer exists,
+    # raising - which callers like android_compose.compose_video()
+    # catch as a blanket "no video for this shot" and silently cache
+    # that wrong conclusion forever. A uuid-suffixed tmp path per call
+    # means every download is independent; only ONE bad thing can still
+    # happen (two downloads of the same bytes, wasted but harmless).
+    tmp_path = path.with_name(f"{path.name}.{uuid.uuid4().hex}.part")
     with open(tmp_path, "wb") as f:
         _container().get_blob_client(f"{PREFIX}{filename}").download_blob().readinto(f)
     tmp_path.replace(path)
