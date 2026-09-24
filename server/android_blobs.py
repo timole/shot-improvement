@@ -188,6 +188,26 @@ def get_cached_path(stem: str, extension: str) -> Path:
 
 
 def _evict_oldest() -> None:
-    cached = sorted(_CACHE_DIR.glob("*"), key=lambda p: p.stat().st_mtime, reverse=True)
-    for stale in cached[_CACHE_MAX_FILES:]:
+    """Runs after every cache-miss download, so concurrent misses for
+    DIFFERENT stems routinely call this at the same time. glob("*")
+    picks up other calls' own in-flight "<name>.<uuid>.part" tmp files
+    (see get_cached_path) - stat()ing one that finishes and gets
+    renamed away between the glob() and the stat() raises
+    FileNotFoundError, which used to escape this function entirely and
+    get misread by a caller several frames up as "the shot doesn't
+    exist" (a 404 for a shot that's really just fine). Skip .part
+    files outright (never eviction candidates - they're not a
+    finished cache entry yet) and tolerate any OTHER file vanishing
+    between glob() and stat() too, for the same reason one concurrent
+    eviction can race another."""
+    entries = []
+    for p in _CACHE_DIR.glob("*"):
+        if p.suffix == ".part":
+            continue
+        try:
+            entries.append((p.stat().st_mtime, p))
+        except OSError:
+            continue
+    entries.sort(key=lambda item: item[0], reverse=True)
+    for _, stale in entries[_CACHE_MAX_FILES:]:
         stale.unlink(missing_ok=True)

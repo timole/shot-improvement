@@ -139,8 +139,23 @@ def get_cached_path(name: str) -> Path:
 
 
 def _evict_oldest() -> None:
+    # Concurrent cache misses call this at the same time (see
+    # android_blobs._evict_oldest's own docstring for the same
+    # reasoning) - a file glob() sees can vanish (renamed/unlinked by
+    # another concurrent call) before stat() gets to it, raising
+    # FileNotFoundError. These patterns already exclude the ".part"
+    # tmp download path by construction (it never ends in ".mp4" or
+    # ".jpg"), but two evictions can still race each other, so stat()
+    # failures are tolerated the same way.
     for pattern, keep in (("*.mp4", _CACHE_MAX_VIDEOS), ("*.jpg", _CACHE_MAX_PREVIEWS)):
-        cached = sorted(_CACHE_DIR.glob(pattern), key=lambda p: p.stat().st_mtime, reverse=True)
+        entries = []
+        for p in _CACHE_DIR.glob(pattern):
+            try:
+                entries.append((p.stat().st_mtime, p))
+            except OSError:
+                continue
+        entries.sort(key=lambda item: item[0], reverse=True)
+        cached = [p for _, p in entries]
         for stale in cached[keep:]:
             stale.unlink(missing_ok=True)
 
