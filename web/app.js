@@ -148,10 +148,10 @@ function AndroidShotList({ shots, onSelect }) {
           />
           <div className="flex-grow-1 small text-truncate">
             <span className="text-muted me-2">{formatRecordedAt(s.recorded_at)}</span>
-            {s.place && <span className="text-muted me-2">{s.place}</span>}
-            <span className="fw-semibold">
+            <span className="fw-semibold me-2">
               {s.speed_kmh != null ? `${Math.round(s.speed_kmh)} km/h` : "Osumaa ei kuulunut."}
             </span>
+            {s.place && <span className="text-muted">{s.place}</span>}
           </div>
         </div>
       ))}

@@ -46,6 +46,7 @@ from __future__ import annotations
 import logging
 import re
 import subprocess
+import uuid
 from pathlib import Path
 
 import imageio_ffmpeg
@@ -158,7 +159,13 @@ def _try_get_precomputed(stem: str, out_path: Path) -> Path | None:
     try:
         if not blob.exists():
             return None
-        tmp = out_path.with_name(out_path.name + ".part")
+        # A unique-per-call name (not just out_path + ".part") - two
+        # concurrent requests for the same stem (e.g. an overlapping
+        # page reload) must never write the same tmp path at once, or
+        # one process's partial write can land in the other's finished
+        # file before its own rename, producing a corrupt cached video
+        # (see thumbnail()'s own tmp naming for the same reasoning).
+        tmp = out_path.with_name(f"{out_path.name}.{uuid.uuid4().hex}.part")
         with open(tmp, "wb") as f:
             blob.download_blob().readinto(f)
         tmp.replace(out_path)
@@ -239,9 +246,24 @@ def render_composed(video_path: Path | None, audio_path: Path, out_path: Path, *
     # through - this is the actual fix, not a cosmetic one.
     cfr_args = ["-r", str(output_fps), "-fps_mode", "cfr"]
 
-    padded_audio = out_path.with_suffix(".padded.wav")
-    spectrogram_png = out_path.with_suffix(".png")
-    tmp_out = out_path.with_suffix(".tmp.mp4")
+    # Unique per call, not just out_path's own name - two concurrent
+    # composes of the SAME stem (e.g. a page reload firing before the
+    # first request's ffmpeg pass finished) would otherwise have both
+    # processes writing these same intermediate paths at once, and
+    # ffmpeg has no locking of its own: the result is a genuinely
+    # corrupt (partially-interleaved) output file that still passes
+    # this function's own "did ffmpeg exit 0" check but fails to
+    # decode in the browser. Each call gets its own tmp names instead;
+    # the final tmp_out.replace(out_path) stays atomic either way.
+    unique = uuid.uuid4().hex
+    padded_audio = out_path.with_suffix(f".{unique}.padded.wav")
+    spectrogram_png = out_path.with_suffix(f".{unique}.png")
+    tmp_out = out_path.with_suffix(f".{unique}.tmp.mp4")
+    # Bound before the try (not just before its first use) - the
+    # finally block below unlinks it unconditionally, and an early
+    # ffmpeg failure must not turn into a NameError masking the real
+    # exception.
+    filter_script = out_path.with_suffix(f".{unique}.filter.txt")
     try:
         _run(["-i", str(audio_path), "-af", f"apad=whole_dur={duration_s}", "-ar", "48000", str(padded_audio)])
         _run([
@@ -250,7 +272,6 @@ def render_composed(video_path: Path | None, audio_path: Path, out_path: Path, *
             str(spectrogram_png),
         ])
 
-        filter_script = out_path.with_suffix(".filter.txt")
         if video_path is not None:
             vrot_step = "[0:v]transpose=1[vrot];\n" if rotate else "[0:v]copy[vrot];\n"
             filter_script.write_text(
@@ -290,7 +311,7 @@ def render_composed(video_path: Path | None, audio_path: Path, out_path: Path, *
         _run(args)
         tmp_out.replace(out_path)
     finally:
-        for tmp in (padded_audio, spectrogram_png, out_path.with_suffix(".filter.txt"), tmp_out):
+        for tmp in (padded_audio, spectrogram_png, filter_script, tmp_out):
             tmp.unlink(missing_ok=True)
     return out_path
 
@@ -311,7 +332,10 @@ def thumbnail(stem: str) -> Path:
     except Exception:
         video_path = None
 
-    tmp_out = out_path.with_suffix(".tmp.jpg")
+    # Unique per call, same reasoning as render_composed()'s tmp
+    # naming: two concurrent thumbnail requests for the same stem must
+    # not both write ".tmp.jpg" at once.
+    tmp_out = out_path.with_suffix(f".{uuid.uuid4().hex}.tmp.jpg")
     if video_path is not None:
         duration_s = probe_duration_s(video_path)
         # A third of the way in tends to land after the wind-up but
