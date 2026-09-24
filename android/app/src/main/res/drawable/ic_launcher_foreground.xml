@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Spec 153: a hockey stick flexed mid-shot - the app icon. A single
+     stroked path (the shaft, curving through a pronounced bend into the
+     blade - "the stick is bending when the snapshot is shot"), two thin
+     motion arcs beside the bend for a sense of energy, and the puck as a
+     small filled circle at the blade. 108x108 viewport per Android's
+     adaptive icon spec; every coordinate stays inside the safe zone
+     (roughly x/y 21-87) so no OEM mask shape (circle, squircle, rounded
+     square...) clips it. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:pathData="M30,26 L50,56 Q60,70 72,64 L86,58"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="9"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:fillColor="#00000000" />
+    <path
+        android:pathData="M62,50 Q68,58 64,66"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="3"
+        android:strokeLineCap="round"
+        android:strokeAlpha="0.55"
+        android:fillColor="#00000000" />
+    <path
+        android:pathData="M70,54 Q76,62 72,70"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="3"
+        android:strokeLineCap="round"
+        android:strokeAlpha="0.35"
+        android:fillColor="#00000000" />
+    <path
+        android:pathData="M80,72 A6,6 0 1,0 92,72 A6,6 0 1,0 80,72 Z"
+        android:fillColor="#FFFFFF" />
+</vector>

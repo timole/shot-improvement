@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Spec 153: the app icon's background - the same purple Compose
+         Material3's default baseline theme already uses for every button
+         in the app (MaterialTheme's own default color scheme, never
+         overridden - see MainActivity's setContent call), so the icon
+         reads as "this app" rather than an arbitrary color choice. -->
+    <color name="ic_launcher_background">#6750A4</color>
+</resources>

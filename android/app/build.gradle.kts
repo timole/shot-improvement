@@ -12,8 +12,8 @@ android {
         applicationId = "tech.timolehtonen.shot"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 17
+        versionName = "0.14.0"
     }
 
     buildTypes {
@@ -31,6 +31,12 @@ android {
     buildFeatures {
         compose = true
     }
+    testOptions {
+        // Log.w etc. are Android-platform stubs in a plain JVM unit test
+        // (every method throws by default) - default-value them instead
+        // of pulling in Robolectric just to make a log call not crash.
+        unitTests.isReturnDefaultValues = true
+    }
 }
 
 dependencies {
@@ -39,6 +45,7 @@ dependencies {
     implementation("androidx.activity:activity-compose:1.9.3")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.ui:ui")
+    implementation("androidx.compose.foundation:foundation")
 
     testImplementation("junit:junit:4.13.2")
 }

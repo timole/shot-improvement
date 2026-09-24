@@ -10,12 +10,10 @@ Run: venv\\Scripts\\python gui.py
 
 from __future__ import annotations
 
-import re
 import threading
 import time
 import tkinter as tk
 import winsound
-from datetime import datetime
 from pathlib import Path
 from tkinter import messagebox, ttk
 from typing import Callable, Optional
@@ -26,13 +24,16 @@ from PIL import Image, ImageTk
 from core import azure_sync, cloud_sync, devices, pending
 from core.status_publish import StatusPublisher
 from core.stick import HandsTrack, StickAnnotator, draw_stick, hands_sidecar_path
-from core.claps import DEFAULT_SHOT_POSITION, SHOT_POSITIONS
+from core.claps import DEFAULT_SHOT_POSITION
 from core.compose import ShotImage, select_shot_frame_range
 from core.log_setup import get_logger, setup_logging
 from core.playback import SKIP_SECONDS, SKIP_SHORT_SECONDS, SPEED_OPTIONS, ClipPlayer, format_time
 from core.recorder import FIXED_EXPOSURE_DSHOW, FRAME_FILE_EXTENSION, FRAME_HEIGHT, FRAME_WIDTH, RECORDINGS_DIR
 from core.segmentation import BackgroundRemover
+from core.rink import DEFAULT_TARGET, TARGET_NAMES, describe, distance_after_target_change, format_distance, parse_distance_m
+from core.session_meta import Session, list_sessions
 from core.session import LiveSession, RecordingResult, ShotSource
+from rink_map import RinkMap
 
 setup_logging()
 logger = get_logger("gui")
@@ -53,6 +54,7 @@ DISPLAY_SIZE = (640, 360)
 # Visible rows in the recordings list (the rest scroll).
 RECORDINGS_LIST_ROWS = 6
 DEFAULT_DURATION_S = 10
+RINK_HINT = "Napsauta paikkaa, maalia tai päätyä - tai kirjoita matka."
 PREVIEW_POLL_MS = 10  # self-paced anyway - actual cadence follows the work each tick does
 # Spec 091: a 3-2-1 countdown before capture actually starts, one
 # second per step, with a short beep on each step so the user (who is
@@ -69,8 +71,6 @@ WAKE_DELAY_MS = 300
 # own, tighter, SLOW_FRAME_WARN_THRESHOLD_S for the read_frame()-level
 # version of this same idea).
 SLOW_TICK_WARN_THRESHOLD_S = 1.0
-
-_FILENAME_TIMESTAMP_RE = re.compile(r"shot-improvement-(\d{14})(?:-annotated|-shot-\d+)?\.(?:mp4|jpg)$")
 
 # Spec 108: raw shot preview's own speed choices - deliberately not
 # core.playback.SPEED_OPTIONS (which includes 1.5x) - the user asked
@@ -100,28 +100,6 @@ _RAW_SHOT_SPEED_LABELS = [_speed_label(s) for s in RAW_SHOT_SPEED_OPTIONS]
 
 def _raw_shot_speed_from_label(label: str) -> float:
     return RAW_SHOT_SPEED_OPTIONS[_RAW_SHOT_SPEED_LABELS.index(label)]
-
-
-def _recording_timestamp(path: Path) -> str:
-    """The 14-digit timestamp in a recording file's name - lets a
-    recording's mp4s and shot images sort together (stable sort keeps
-    name order within one recording)."""
-    match = re.search(r"(\d{14})", path.name)
-    return match.group(1) if match else ""
-
-
-def _created_label(path: Path) -> str:
-    """The recording's creation time, parsed from its own filename
-    timestamp (shot-improvement-YYYYMMDDHHMMSS[-annotated].mp4) rather
-    than filesystem mtime, which a copy/move could change."""
-    match = _FILENAME_TIMESTAMP_RE.search(path.name)
-    if not match:
-        return ""
-    try:
-        dt = datetime.strptime(match.group(1), "%Y%m%d%H%M%S")
-    except ValueError:
-        return ""
-    return dt.strftime("%Y-%m-%d %H:%M:%S")
 
 
 class App:
@@ -225,7 +203,7 @@ class App:
         self._build_list(self.left_frame)
         self._apply_layout()
 
-        self._video_paths: list[Path] = []
+        self._sessions: list[Session] = []
         self.refresh_recordings()
         # Independent of the camera/session (spec 093: processing a
         # pending queue never touches the camera) - shown immediately,
@@ -303,16 +281,47 @@ class App:
         self.duration_var.trace_add("write", lambda *_: self._update_record_button_text())
         self._update_record_button_text()
 
-        # Spec 128: where the shot is taken from - sets the distance the
-        # puck's speed is computed over (core.claps.SHOT_POSITIONS).
-        position_row = ttk.Frame(root)
-        position_row.pack(pady=(0, 4))
-        ttk.Label(position_row, text="Ammuntapaikka:").pack(side="left", padx=(0, 4))
-        self.shot_position_var = tk.StringVar(value=DEFAULT_SHOT_POSITION.label)
-        ttk.Combobox(
-            position_row, textvariable=self.shot_position_var, state="readonly", width=44,
-            values=[p.label for p in SHOT_POSITIONS],
-        ).pack(side="left")
+        # Spec 128/137: where the shot is taken from and what it hits (the
+        # goal, or the end boards) - the distance between them is what the
+        # puck's speed is computed over. The field holds the metres (typed,
+        # or set by a click on the rink map, which is only a shortcut) and
+        # the radio buttons the target (a click on the goal or the end
+        # boards on the map picks it too); the label names the place
+        # (core.rink.describe).
+        # It lives at the bottom of the centre column, under the video and
+        # the timeline (packed side="bottom" so those keep sitting right
+        # under the video) - the left column is already the tall one.
+        position_frame = ttk.LabelFrame(self.center_frame, text="Ammuntapaikka ja kohde")
+        position_frame.pack(side="bottom", padx=8, pady=(4, 8))
+        position_row = ttk.Frame(position_frame)
+        position_row.pack(pady=(4, 0))
+        ttk.Label(position_row, text="Matka:").pack(side="left", padx=(0, 4))
+        self.distance_var = tk.StringVar(value=format_distance(DEFAULT_SHOT_POSITION.distance_m))
+        self.distance_spinbox = ttk.Spinbox(
+            position_row, from_=2, to=60, increment=0.5, textvariable=self.distance_var, width=6,
+        )
+        self.distance_spinbox.pack(side="left")
+        ttk.Label(position_row, text="m").pack(side="left", padx=(2, 12))
+        ttk.Label(position_row, text="Kohde:").pack(side="left", padx=(0, 4))
+        self.target_var = tk.StringVar(value=DEFAULT_TARGET)
+        self._prev_target = DEFAULT_TARGET
+        for target, name in TARGET_NAMES.items():
+            ttk.Radiobutton(
+                position_row, text=name, value=target, variable=self.target_var, command=self.on_target_changed,
+            ).pack(side="left", padx=(0, 6))
+        self.place_var = tk.StringVar(value="")
+        ttk.Label(position_frame, textvariable=self.place_var, foreground="#555", wraplength=340).pack()
+        self.rink_map = RinkMap(
+            position_frame, on_pick=self._on_rink_pick, on_pick_target=self._on_rink_pick_target,
+            on_hover=self._on_rink_hover,
+        )
+        self.rink_map.pack(pady=(2, 0))
+        self.rink_hint_var = tk.StringVar(value=RINK_HINT)
+        ttk.Label(position_frame, textvariable=self.rink_hint_var, foreground="#555").pack()
+        self._recording_distance_m = DEFAULT_SHOT_POSITION.distance_m
+        self._recording_target = DEFAULT_TARGET
+        self.distance_var.trace_add("write", lambda *_: self._on_distance_changed())
+        self._on_distance_changed()
 
         # Spec 093: post-capture processing (pose annotation,
         # spectrogram, ffmpeg encoding) is CPU-heavy enough on modest
@@ -429,21 +438,43 @@ class App:
         ).pack(side="left", padx=(6, 0))
 
     def _build_list(self, root: tk.Tk) -> None:
+        # Spec 137: one row per recording session (its raw + annotated clip
+        # and shot images together), with where it was shot from and the
+        # fastest shot; selecting one shows its metadata and shot images.
         list_frame = self.list_frame = ttk.Frame(root)
         list_frame.pack(fill="both", expand=True, padx=8, pady=(0, 4))
         ttk.Label(list_frame, text="Tallenteet (kaksoisnapsauta toistaaksesi):").pack(anchor="w")
         inner = ttk.Frame(list_frame)
         inner.pack(fill="both", expand=True)
-        self.tree = ttk.Treeview(inner, columns=("created",), show="tree headings", height=RECORDINGS_LIST_ROWS, selectmode="browse")
-        self.tree.heading("#0", text="Nimi")
-        self.tree.heading("created", text="Luotu")
-        self.tree.column("#0", width=300, anchor="w")
-        self.tree.column("created", width=160, anchor="w")
+        self.tree = ttk.Treeview(
+            inner, columns=("place", "fastest"), show="tree headings", height=RECORDINGS_LIST_ROWS, selectmode="browse",
+        )
+        self.tree.heading("#0", text="Luotu")
+        self.tree.heading("place", text="Ammuntapaikka")
+        self.tree.heading("fastest", text="Nopein")
+        self.tree.column("#0", width=190, anchor="w", stretch=False)
+        self.tree.column("place", width=230, anchor="w")
+        self.tree.column("fastest", width=70, anchor="w", stretch=False)
         self.tree.pack(side="left", fill="both", expand=True)
         self.tree.bind("<Double-Button-1>", self.on_play_selected)
+        self.tree.bind("<<TreeviewSelect>>", self.on_session_selected)
         scrollbar = ttk.Scrollbar(inner, orient="vertical", command=self.tree.yview)
         scrollbar.pack(side="right", fill="y")
         self.tree.config(yscrollcommand=scrollbar.set)
+
+        details = self.details_frame = ttk.LabelFrame(list_frame, text="Tallenteen tiedot")
+        details.pack(fill="x", pady=(4, 0))
+        self.detail_var = tk.StringVar(value="Valitse tallenne.")
+        ttk.Label(details, textvariable=self.detail_var, justify="left", wraplength=440).pack(anchor="w", padx=6, pady=(2, 2))
+        shots_row = ttk.Frame(details)
+        shots_row.pack(fill="x", padx=6, pady=(0, 4))
+        self._detail_shots: list = []
+        self.detail_shots = tk.Listbox(shots_row, height=3, exportselection=False, activestyle="none")
+        self.detail_shots.pack(side="left", fill="x", expand=True)
+        self.detail_shots.bind("<<ListboxSelect>>", self.on_detail_shot_selected)
+        detail_scroll = ttk.Scrollbar(shots_row, orient="vertical", command=self.detail_shots.yview)
+        detail_scroll.pack(side="right", fill="y")
+        self.detail_shots.config(yscrollcommand=detail_scroll.set)
 
         button_row = ttk.Frame(root)
         button_row.pack(pady=(0, 8))
@@ -808,6 +839,12 @@ class App:
                 self._counting_down, self._mode,
             )
             return
+        distance_m = self._selected_shot_distance_m()
+        if distance_m is None:
+            self.status_var.set("Anna ammuntamatka metreinä (2-60 m).")
+            return
+        self._recording_distance_m = distance_m
+        self._recording_target = self.target_var.get()
         self._exit_shots_mode()
         self._exit_image_mode()
         try:
@@ -875,7 +912,8 @@ class App:
             on_deferred_saved=self._on_deferred_saved,
             on_shots_ready=self._on_shots_ready,
             on_capture_ended=self._on_capture_ended,
-            shot_distance_m=self._selected_shot_distance_m(),
+            shot_distance_m=self._recording_distance_m,
+            shot_target=self._recording_target,
         )
 
     def _update_record_button_text(self) -> None:
@@ -886,12 +924,42 @@ class App:
             return
         self.record_button.config(text=f"Tallenna {seconds:g} s")
 
-    def _selected_shot_distance_m(self) -> float:
-        label = self.shot_position_var.get()
-        for position in SHOT_POSITIONS:
-            if position.label == label:
-                return position.distance_m
-        return DEFAULT_SHOT_POSITION.distance_m
+    def _selected_shot_distance_m(self) -> Optional[float]:
+        """The distance in the field, in metres; None if it isn't a valid one."""
+        return parse_distance_m(self.distance_var.get())
+
+    def _on_distance_changed(self) -> None:
+        distance = self._selected_shot_distance_m()
+        self.rink_map.set_distance(distance)
+        if distance is None:
+            self.place_var.set("Anna matka metreinä (2-60 m).")
+        else:
+            self.place_var.set(describe(distance, self.target_var.get()))
+
+    def _on_rink_pick(self, distance_m: float) -> None:
+        self.distance_var.set(format_distance(distance_m))
+
+    def _on_rink_pick_target(self, target: str) -> None:
+        self.target_var.set(target)
+        self.on_target_changed()
+
+    def on_target_changed(self) -> None:
+        """A new target keeps the shooter where they stand, so the
+        distance moves by the gap between the two targets (goal -> end
+        boards is 4 m more); a named place keeps its own distance to it."""
+        new, old = self.target_var.get(), self._prev_target
+        if new == old:
+            return
+        self._prev_target = new
+        self.rink_map.set_target(new)
+        distance = self._selected_shot_distance_m()
+        if distance is None:
+            self._on_distance_changed()
+            return
+        self.distance_var.set(format_distance(distance_after_target_change(distance, old, new)))
+
+    def _on_rink_hover(self, text: str) -> None:
+        self.rink_hint_var.set(text or RINK_HINT)
 
     @staticmethod
     def _play_beep() -> None:
@@ -1267,44 +1335,81 @@ class App:
 
     def refresh_recordings(self) -> None:
         RECORDINGS_DIR.mkdir(parents=True, exist_ok=True)
-        # Spec 125: the per-shot snapshot JPEGs are listed too, right
-        # after their recording's videos (newest recording first).
-        paths = list(RECORDINGS_DIR.glob("*.mp4")) + list(RECORDINGS_DIR.glob("*-shot-*.jpg"))
-        paths.sort(key=lambda p: p.name)
-        self._video_paths = sorted(paths, key=_recording_timestamp, reverse=True)
+        selected = self.tree.selection()
+        self._sessions = list_sessions(RECORDINGS_DIR)
         self.tree.delete(*self.tree.get_children())
-        for i, path in enumerate(self._video_paths):
-            self.tree.insert("", "end", iid=str(i), text=path.name, values=(_created_label(path),))
+        for session in self._sessions:
+            fastest = f"{round(session.fastest_kmh)} km/h" if session.fastest_kmh is not None else "—"
+            self.tree.insert("", "end", iid=session.timestamp, text=session.created_label, values=(session.place, fastest))
+        if selected and self.tree.exists(selected[0]):
+            self.tree.selection_set(selected[0])
+        else:
+            self._show_session_details(None)
 
-    def _selected_path(self) -> Optional[Path]:
+    def _selected_session(self) -> Optional[Session]:
         selection = self.tree.selection()
         if not selection:
             return None
-        return self._video_paths[int(selection[0])]
+        return next((s for s in self._sessions if s.timestamp == selection[0]), None)
+
+    def on_session_selected(self, _event=None) -> None:
+        self._show_session_details(self._selected_session())
+
+    def _show_session_details(self, session: Optional[Session]) -> None:
+        """Spec 137: the selected session metadata and its shot images
+        (pick one in the list below to see it in the preview area)."""
+        self._detail_shots = session.shots if session is not None else []
+        self.detail_shots.delete(0, "end")
+        if session is None:
+            self.detail_var.set("Valitse tallenne.")
+            return
+        fastest = f"{round(session.fastest_kmh)} km/h" if session.fastest_kmh is not None else "—"
+        duration = f"{session.duration_s:g} s" if session.duration_s is not None else "—"
+        self.detail_var.set(
+            f"Ammuntapaikka: {session.place}\n"
+            f"Kesto: {duration}\n"
+            f"Nopein laukaus: {fastest}\n"
+            f"Laukauksia: {len(session.shots)}"
+        )
+        for shot in session.shots:
+            speed = f"{round(shot.speed_kmh)} km/h" if shot.speed_kmh is not None else "—"
+            self.detail_shots.insert("end", f"Laukaus {shot.index}: {speed}  ({shot.path.name})")
+
+    def on_detail_shot_selected(self, _event=None) -> None:
+        selection = self.detail_shots.curselection()
+        if not selection:
+            return
+        self.show_still_image(self._detail_shots[selection[0]].path)
 
     def on_delete_selected(self) -> None:
-        path = self._selected_path()
-        if path is None:
+        session = self._selected_session()
+        if session is None:
             return
-        if not messagebox.askyesno("Poista tallenne", f"Poistetaanko {path.name}?"):
+        if not messagebox.askyesno(
+            "Poista tallenne", f"Poistetaanko tallenne {session.created_label} ja sen {len(session.files)} tiedostoa?",
+        ):
             return
-        logger.info("Deleting recording %s", path.name)
-        path.unlink(missing_ok=True)
+        logger.info("Deleting recording session %s (%d files)", session.timestamp, len(session.files))
+        for path in session.files:
+            path.unlink(missing_ok=True)
         self.refresh_recordings()
 
         # Spec 094: both the raw and annotated clip sync to the cloud
-        # now (previously only the annotated one did, so only that one
-        # got a matching cloud delete) - whichever member of the pair
-        # was just deleted locally gets tombstoned the same way.
-        def on_sync_done(exc: Optional[Exception]) -> None:
-            if exc is not None:
-                logger.warning("Cloud delete failed for %s: %s", path.name, exc)
-                self.status_var.set(f"Poisto verkosta epäonnistui: {exc}")
-            else:
-                self.status_var.set("Poistettu myös verkosta.")
+        # (a local delete gets a matching cloud delete via a tombstone);
+        # spec 125: the shot images and sidecars do not, so only the mp4s.
+        def sync_delete(name: str) -> None:
+            def on_sync_done(exc: Optional[Exception]) -> None:
+                if exc is not None:
+                    logger.warning("Cloud delete failed for %s: %s", name, exc)
+                    self.status_var.set(f"Poisto verkosta epäonnistui: {exc}")
+                else:
+                    self.status_var.set("Poistettu myös verkosta.")
 
-        if path.suffix.lower() == ".mp4":  # shot images aren't synced to the cloud
-            self._sync_worker.delete_recording(path.name, on_done=on_sync_done)
+            self._sync_worker.delete_recording(name, on_done=on_sync_done)
+
+        for path in session.files:
+            if path.suffix.lower() == ".mp4":
+                sync_delete(path.name)
 
     # --- native playback (same preview area, no external player) -------
     #
@@ -1315,11 +1420,12 @@ class App:
     # returns.
 
     def on_play_selected(self, _event=None) -> None:
-        path = self._selected_path()
-        if path is None:
+        session = self._selected_session()
+        if session is None:
             return
-        if path.suffix.lower() == ".jpg":
-            self.show_still_image(path)
+        path = session.play_path
+        if path is None:
+            self.status_var.set("Tallenteella ei ole videota.")
             return
         self.load_and_play(path)
 
@@ -1531,7 +1637,10 @@ class App:
         self.beeps_var.set(str(DEFAULT_BEEPS))
         self.defer_processing_var.set(True)
         self.session.set_exposure(FIXED_EXPOSURE_DSHOW)
-        self.shot_position_var.set(DEFAULT_SHOT_POSITION.label)
+        self.target_var.set(DEFAULT_TARGET)
+        self._prev_target = DEFAULT_TARGET
+        self.rink_map.set_target(DEFAULT_TARGET)
+        self.distance_var.set(format_distance(DEFAULT_SHOT_POSITION.distance_m))
         self.raw_speed_var.set(_speed_label(1.0))
         self.speed_var.set(_speed_label(1.0))
         self.volume_var.set(1.0)
