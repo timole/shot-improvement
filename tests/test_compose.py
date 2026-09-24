@@ -308,6 +308,91 @@ def test_save_shot_images_returns_empty_list_when_no_claps(tmp_path) -> None:
     assert list(out_dir.glob("*.jpg")) == []
 
 
+def test_save_shot_images_draws_the_strip_speeds_with_the_shot_distance(tmp_path, monkeypatch) -> None:
+    """The strip under each shot image was drawn with the 57 m default, so
+    a 46 m shot read 128 km/h in the list and 159 km/h in the strip."""
+    import core.compose as compose
+
+    seen = []
+    real = compose.draw_pair_annotations
+    monkeypatch.setattr(
+        compose, "draw_pair_annotations",
+        lambda spectrogram, pairs, duration_s, distance_m=57.0: (seen.append(distance_m), real(spectrogram, pairs, duration_s, distance_m))[1],
+    )
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    _write_indexed_frames(raw_dir, 20)
+    frame_times = [i * 10.0 / 19 for i in range(20)]
+
+    save_shot_images(raw_dir, "bmp", frame_times, _synth_claps_audio([2.0, 5.0], 10.0), 44100, out_dir, "clip", distance_m=57.0)
+    save_shot_images(raw_dir, "bmp", frame_times, _synth_claps_audio([2.0, 2.9], 10.0), 44100, out_dir, "clip", distance_m=46.0)
+
+    assert seen == [57.0, 46.0]
+
+
+def test_save_shot_images_writes_session_metadata_with_distance_and_speeds(tmp_path) -> None:
+    """Spec 137: the recordings list reads where a session was shot from
+    and its speeds from this sidecar."""
+    import json
+
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    frame_count, duration_s = 20, 10.0
+    _write_indexed_frames(raw_dir, frame_count)
+    frame_times = [i * duration_s / (frame_count - 1) for i in range(frame_count)]
+    audio = _synth_claps_audio([2.0, 5.0, 8.0], duration_s)
+
+    saved = save_shot_images(raw_dir, "bmp", frame_times, audio, 44100, out_dir, "clip", distance_m=57.0)
+
+    data = json.loads((out_dir / "clip-session.json").read_text(encoding="utf-8"))
+    assert data["distance_m"] == 57.0
+    assert data["duration_s"] == pytest.approx(10.0)
+    assert [s["index"] for s in data["shots"]] == [1, 2]
+    assert data["shots"][0]["speed_kmh"] == pytest.approx(saved[0].speed_kmh)
+    assert data["shots"][1]["speed_kmh"] is None
+    assert data["fastest_kmh"] == pytest.approx(saved[0].speed_kmh)
+
+
+def test_save_shot_images_stores_what_the_puck_hit(tmp_path) -> None:
+    import json
+
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    _write_indexed_frames(raw_dir, 10)
+    frame_times = [i * 5.0 / 9 for i in range(10)]
+    silent = np.zeros(5 * 44100, dtype=np.int16)
+
+    save_shot_images(raw_dir, "bmp", frame_times, silent, 44100, out_dir, "a", distance_m=22.5, target="end")
+    save_shot_images(raw_dir, "bmp", frame_times, silent, 44100, out_dir, "b", distance_m=18.5)
+
+    assert json.loads((out_dir / "a-session.json").read_text(encoding="utf-8"))["target"] == "end"
+    assert json.loads((out_dir / "b-session.json").read_text(encoding="utf-8"))["target"] == "goal"
+
+
+def test_save_shot_images_writes_session_metadata_even_when_no_shot_is_found(tmp_path) -> None:
+    import json
+
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    _write_indexed_frames(raw_dir, 10)
+    frame_times = [i * 5.0 / 9 for i in range(10)]
+
+    save_shot_images(raw_dir, "bmp", frame_times, np.zeros(5 * 44100, dtype=np.int16), 44100, out_dir, "clip", distance_m=6.0)
+
+    data = json.loads((out_dir / "clip-session.json").read_text(encoding="utf-8"))
+    assert data["distance_m"] == 6.0
+    assert data["shots"] == []
+    assert data["fastest_kmh"] is None
+
+
 def test_select_shot_frame_range_paired_shot_spans_preroll_to_hit() -> None:
     frame_times = [i * 0.2 for i in range(31)]  # 0.0 .. 6.0s, 0.2s apart
 

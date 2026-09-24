@@ -1,4 +1,4 @@
-"""FastAPI gallery for shot.timolehtonen.tech (spec 095/096) - v1: sign
+"""FastAPI gallery for snapshot.timolehtonen.tech (spec 095/096) - v1: sign
 in with a Microsoft account, list the annotated clips currently in
 Azure Blob Storage, play one with a thumbnail, download it.
 
@@ -23,10 +23,10 @@ from typing import Optional
 
 import httpx
 from azure.core.exceptions import ResourceNotFoundError
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, RedirectResponse, Response
 
-from . import auth, blob_videos, config
+from . import android_blobs, android_compose, auth, blob_videos, config
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)-7s %(name)s: %(message)s")
 logger = logging.getLogger("shot_improvement_server")
@@ -40,7 +40,7 @@ STATE_COOKIE_NAME = "shot_oauth_state"
 # must match exactly (this deployment only ever serves this one
 # domain, so hardcoding it is simpler and safer than trusting request
 # headers for it).
-REDIRECT_URI = "https://shot.timolehtonen.tech/api/login/callback"
+REDIRECT_URI = "https://snapshot.timolehtonen.tech/api/login/callback"
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 # The page shell, app.js and the install page change with every deploy but
 # have no fingerprint in their URL. Without Cache-Control a browser may
@@ -63,6 +63,18 @@ def _session_email(request: Request) -> Optional[str]:
     if email not in auth.parse_allowed_emails(config.ALLOWED_EMAILS):
         return None
     return email
+
+
+def _check_upload_token(request: Request) -> None:
+    """Spec 147: the Android app's own auth for POST /api/android/upload -
+    a plain shared secret, not a session cookie (the phone never does the
+    browser-based Microsoft sign-in _session_email checks). compare_digest,
+    not `==` - a timing side-channel on a long-lived bearer token is worth
+    avoiding even though the actual attack surface here is small."""
+    authz = request.headers.get("Authorization", "")
+    token = authz[len("Bearer "):] if authz.startswith("Bearer ") else ""
+    if not token or not secrets_module.compare_digest(token, config.ANDROID_UPLOAD_TOKEN):
+        raise HTTPException(status_code=401, detail="Invalid upload token.")
 
 
 @app.get("/api/login/start")
@@ -236,8 +248,174 @@ def preview_bytes(name: str, request: Request) -> FileResponse:
     )
 
 
+@app.post("/api/android/upload")
+async def android_upload(
+    request: Request,
+    stem: str = Form(...),
+    video: Optional[UploadFile] = File(None),
+    audio: Optional[UploadFile] = File(None),
+    metadata: Optional[UploadFile] = File(None),
+) -> dict:
+    """Spec 147: one shot's video/audio/metadata from the Android app,
+    straight after it's decoded locally - none of these three are
+    required (spec 140: a shot with no camera that session has no
+    video), but at least one actual part should normally be present."""
+    _check_upload_token(request)
+    if not android_blobs.is_valid_stem(stem):
+        raise HTTPException(status_code=400, detail="Invalid stem.")
+    try:
+        video_bytes = await video.read() if video is not None else None
+        audio_bytes = await audio.read() if audio is not None else None
+        metadata_bytes = await metadata.read() if metadata is not None else None
+        android_blobs.upload_shot(stem, video_bytes, audio_bytes, metadata_bytes)
+    except Exception:
+        logger.exception("android_upload: failed for %s", stem)
+        raise HTTPException(status_code=503, detail="Upload failed.")
+    return {"ok": True}
+
+
+@app.get("/api/android/videos")
+def android_videos_list(request: Request) -> dict:
+    if _session_email(request) is None:
+        raise HTTPException(status_code=401, detail="Kirjaudu sisään.")
+    try:
+        return {"shots": android_blobs.list_shots()}
+    except Exception:
+        logger.exception("Failed to list android shots")
+        raise HTTPException(status_code=503, detail="Listaus epäonnistui.")
+
+
+@app.get("/api/android/videos/{stem}")
+def android_video_bytes(stem: str, request: Request) -> FileResponse:
+    # `stem` is checked against android_blobs.STEM_RE before it ever reaches
+    # Azure, same guard as GET /api/videos/{name} uses for the desktop clips.
+    if _session_email(request) is None:
+        raise HTTPException(status_code=401, detail="Kirjaudu sisään.")
+    if not android_blobs.is_valid_stem(stem):
+        raise HTTPException(status_code=404, detail="Videota ei löytynyt.")
+    try:
+        path = android_blobs.get_cached_path(stem, "mp4")
+    except (ResourceNotFoundError, OSError, ValueError):
+        raise HTTPException(status_code=404, detail="Videota ei löytynyt.")
+    except Exception:
+        logger.exception("Failed to fetch android video %s", stem)
+        raise HTTPException(status_code=404, detail="Videota ei löytynyt.")
+    return FileResponse(
+        path,
+        media_type="video/mp4",
+        headers={"Cache-Control": "private, max-age=31536000, immutable"},
+    )
+
+
+@app.get("/api/android/audio/{stem}")
+def android_audio_bytes(stem: str, request: Request) -> FileResponse:
+    if _session_email(request) is None:
+        raise HTTPException(status_code=401, detail="Kirjaudu sisään.")
+    if not android_blobs.is_valid_stem(stem):
+        raise HTTPException(status_code=404, detail="Ääntä ei löytynyt.")
+    try:
+        path = android_blobs.get_cached_path(stem, "wav")
+    except (ResourceNotFoundError, OSError, ValueError):
+        raise HTTPException(status_code=404, detail="Ääntä ei löytynyt.")
+    except Exception:
+        logger.exception("Failed to fetch android audio %s", stem)
+        raise HTTPException(status_code=404, detail="Ääntä ei löytynyt.")
+    return FileResponse(
+        path,
+        media_type="audio/wav",
+        headers={"Cache-Control": "private, max-age=31536000, immutable"},
+    )
+
+
+@app.get("/api/android/composed/{stem}")
+def android_composed_bytes(stem: str, request: Request) -> FileResponse:
+    """Spec 149: video + audio + spectrogram (and, once
+    tools/compose_android_shots.py has processed the shot, hand-position
+    boxes) combined into one .mp4 - what the web gallery's single-shot
+    view actually plays, instead of juggling separate elements. Same
+    session gate and stem validation as every other android/ route."""
+    if _session_email(request) is None:
+        raise HTTPException(status_code=401, detail="Kirjaudu sisään.")
+    if not android_blobs.is_valid_stem(stem):
+        raise HTTPException(status_code=404, detail="Videota ei löytynyt.")
+    try:
+        path = android_compose.compose_video(stem)
+    except (ResourceNotFoundError, OSError, ValueError):
+        raise HTTPException(status_code=404, detail="Videota ei löytynyt.")
+    except Exception:
+        logger.exception("Failed to compose android video %s", stem)
+        raise HTTPException(status_code=503, detail="Videon koostaminen epäonnistui.")
+    return FileResponse(
+        path,
+        media_type="video/mp4",
+        headers={"Cache-Control": "private, max-age=31536000, immutable"},
+    )
+
+
+@app.get("/api/android/composed-meta/{stem}")
+def android_composed_meta(stem: str, request: Request) -> dict:
+    """Spec 149: the composed video's own duration, frame rate and real
+    frame count - the web player's "one frame" step needs the real fps
+    (an HTML5 <video> element exposes duration but not fps), and the
+    "ruutu N/count" readout (matching MainActivity's own VideoFrameBox)
+    needs the real count, not a derived one (round(duration*fps) was
+    off by one on a real file - see probe_frame_count's own docstring).
+    All cheap once the file is already cached (compose_video is
+    idempotent)."""
+    if _session_email(request) is None:
+        raise HTTPException(status_code=401, detail="Kirjaudu sisään.")
+    if not android_blobs.is_valid_stem(stem):
+        raise HTTPException(status_code=404, detail="Videota ei löytynyt.")
+    try:
+        path = android_compose.compose_video(stem)
+        return {
+            "duration_s": android_compose.probe_duration_s(path),
+            "fps": android_compose.probe_fps(path),
+            "frame_count": android_compose.probe_frame_count(path),
+        }
+    except (ResourceNotFoundError, OSError, ValueError):
+        raise HTTPException(status_code=404, detail="Videota ei löytynyt.")
+    except Exception:
+        logger.exception("Failed to read android composed metadata %s", stem)
+        raise HTTPException(status_code=503, detail="Videon tietojen luku epäonnistui.")
+
+
+@app.get("/api/android/thumbnail/{stem}")
+def android_thumbnail_bytes(stem: str, request: Request) -> FileResponse:
+    """Spec 149: a single preview frame (or, for an audio-only shot, the
+    spectrogram image) - the small preview both the web list and
+    MainActivity's own Historia rows show."""
+    if _session_email(request) is None:
+        raise HTTPException(status_code=401, detail="Kirjaudu sisään.")
+    if not android_blobs.is_valid_stem(stem):
+        raise HTTPException(status_code=404, detail="Kuvaa ei löytynyt.")
+    try:
+        path = android_compose.thumbnail(stem)
+    except (ResourceNotFoundError, OSError, ValueError):
+        raise HTTPException(status_code=404, detail="Kuvaa ei löytynyt.")
+    except Exception:
+        logger.exception("Failed to build android thumbnail %s", stem)
+        raise HTTPException(status_code=503, detail="Esikatselukuvan luonti epäonnistui.")
+    return FileResponse(
+        path,
+        media_type="image/jpeg",
+        headers={"Cache-Control": "private, max-age=31536000, immutable"},
+    )
+
+
 @app.get("/")
 def index_page() -> FileResponse:
+    return FileResponse(WEB_DIR / "index.html", headers=REVALIDATE)
+
+
+@app.get("/liikeratatallenteet")
+@app.get("/puhelimen-laukaukset")
+def sub_page() -> FileResponse:
+    """Spec 148: both are the same page shell as GET / - app.js itself
+    branches on window.location.pathname (see App()) to decide which of
+    HomePage/GalleryPage/AndroidPage to render, the same way GET /android
+    below is a distinct static page rather than a third branch of app.js
+    (that one's public/unauthenticated, so it has to be separate)."""
     return FileResponse(WEB_DIR / "index.html", headers=REVALIDATE)
 
 

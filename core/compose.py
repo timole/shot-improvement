@@ -61,6 +61,8 @@ from .claps import PUCK_TRAVEL_DISTANCE_M, detect_claps, pair_claps, puck_speed_
 from .log_setup import get_logger
 from .pose import PalmBox, PoseDetector, draw_palm_boxes
 from .profiling import NULL_PROFILER, Profiler
+from .rink import DEFAULT_TARGET
+from .session_meta import write_session_meta
 from .stick import hands_from_boxes, write_hands_sidecar
 from .spectrogram import (
     PLAYHEAD_COLOR_BGR,
@@ -346,7 +348,7 @@ def _draw_bottom_centered_label(frame: np.ndarray, text: str, font_px: int, colo
     _put_outlined_text(frame, text, x, y, SHOT_IMAGE_FONT, scale, color, thickness)
 
 
-def save_shot_images(
+def _save_shot_images(
     raw_dir: Path,
     extension: str,
     frame_times: Sequence[float],
@@ -404,7 +406,7 @@ def save_shot_images(
     strip_width = first_frame.shape[1]
     spectrogram = compute_spectrogram_image(audio, strip_width, SHOT_SPECTROGRAM_HEIGHT)
     pairs = [(shot_t, hit_t) for shot_t, hit_t in shots if hit_t is not None]
-    draw_pair_annotations(spectrogram, pairs, audio_duration_s)
+    draw_pair_annotations(spectrogram, pairs, audio_duration_s, distance_m)
 
     with PoseDetector() as detector:
         for i, (shot_t, hit_t) in enumerate(shots, start=1):
@@ -435,6 +437,35 @@ def save_shot_images(
             saved.append(ShotImage(index=i, path=out_path, time_s=shot_t, speed_kmh=speed_kmh, hit_t=hit_t))
 
     logger.info("save_shot_images: saved %d shot image(s) for %s", len(saved), filename_stem)
+    return saved
+
+
+def save_shot_images(
+    raw_dir: Path,
+    extension: str,
+    frame_times: Sequence[float],
+    audio: np.ndarray,
+    sample_rate: int,
+    out_dir: Path,
+    filename_stem: str,
+    distance_m: float = PUCK_TRAVEL_DISTANCE_M,
+    target: str = DEFAULT_TARGET,
+) -> list[ShotImage]:
+    """_save_shot_images (see its docstring), and - spec 137 - writes the
+    recording's session metadata ("<filename_stem>-session.json": shooting
+    distance, duration, each shot's speed) next to the images, even when
+    no shot was found, so the recordings list can say where a session was
+    shot from."""
+    saved = _save_shot_images(
+        raw_dir, extension, frame_times, audio, sample_rate, out_dir, filename_stem, distance_m,
+    )
+    duration_s = len(audio) / sample_rate if sample_rate > 0 else 0.0
+    try:
+        write_session_meta(out_dir, filename_stem, distance_m, duration_s, saved, target)
+    except OSError:
+        # The shot images are the result; losing the metadata sidecar
+        # must not fail the recording.
+        logger.exception("save_shot_images: could not write session metadata for %s", filename_stem)
     return saved
 
 

@@ -47,6 +47,7 @@ import soundfile as sf
 from .claps import PUCK_TRAVEL_DISTANCE_M
 from .log_setup import get_logger
 from .profiling import NULL_PROFILER, Profiler
+from .rink import DEFAULT_TARGET, TARGETS
 
 logger = get_logger("pending")
 
@@ -77,6 +78,8 @@ class PendingRecording:
     # Spec 128: the shot position's puck-travel distance chosen when this
     # was recorded (processing can happen long after) - see core.claps.
     distance_m: float = PUCK_TRAVEL_DISTANCE_M
+    # Spec 137: what the puck hits ("goal" / "end"), likewise kept for later.
+    target: str = DEFAULT_TARGET
 
     @property
     def raw_dir(self) -> Path:
@@ -102,6 +105,7 @@ def write_meta(
     audio_name: Optional[str],
     frame_times: Optional[list[float]] = None,
     distance_m: float = PUCK_TRAVEL_DISTANCE_M,
+    target: str = DEFAULT_TARGET,
 ) -> None:
     meta = {
         "frame_count": frame_count,
@@ -112,6 +116,7 @@ def write_meta(
         "created_at": datetime.now().isoformat(),
         "frame_times": frame_times or [],
         "distance_m": distance_m,
+        "target": target,
     }
     (dir_path / META_FILENAME).write_text(json.dumps(meta, indent=2), encoding="utf-8")
 
@@ -148,6 +153,7 @@ def list_pending(pending_dir: Path = PENDING_DIR) -> list[PendingRecording]:
                 created_at=str(meta["created_at"]),
                 frame_times=[float(t) for t in meta.get("frame_times", [])],
                 distance_m=float(meta.get("distance_m", PUCK_TRAVEL_DISTANCE_M)),
+                target=meta.get("target") if meta.get("target") in TARGETS else DEFAULT_TARGET,
             ))
         except (json.JSONDecodeError, KeyError, ValueError, OSError):
             logger.warning("list_pending: %s has an unreadable %s, skipping", entry.name, META_FILENAME, exc_info=True)
@@ -251,7 +257,7 @@ def process_pending_recording(
                 with profiler.accum("shot_images"):
                     save_shot_images(
                         item.raw_dir, FRAME_FILE_EXTENSION, item.frame_times, audio_buffer, SAMPLE_RATE,
-                        out_dir, f"shot-improvement-{item.timestamp}", distance_m=item.distance_m,
+                        out_dir, f"shot-improvement-{item.timestamp}", distance_m=item.distance_m, target=item.target,
                     )
                 encode_frames_with_audio(
                     annotated_dir, item.audio_path, annotated_out, item.actual_fps, item.frame_count,

@@ -170,3 +170,28 @@ def test_created_label_falls_back_to_raw_value_when_unparseable() -> None:
         video_name="cam", audio_name=None, created_at="not-a-date",
     )
     assert item.created_label() == "not-a-date"
+
+
+def test_the_target_round_trips_through_the_pending_queue(tmp_path: Path) -> None:
+    """Spec 137: processing can happen long after capture, so what the
+    puck hit (goal / end boards) is kept with the distance."""
+    capture_dir = _make_capture_dir(tmp_path, "20260101120000")
+    write_meta(
+        capture_dir, frame_count=1, actual_fps=1.0, duration_s=1.0, video_name="cam", audio_name=None,
+        distance_m=22.5, target="end",
+    )
+
+    assert list_pending(tmp_path)[0].target == "end"
+
+
+def test_a_pending_entry_without_a_target_defaults_to_the_goal(tmp_path: Path) -> None:
+    capture_dir = _make_capture_dir(tmp_path, "20260101120000")
+    write_meta(capture_dir, frame_count=1, actual_fps=1.0, duration_s=1.0, video_name="cam", audio_name=None)
+    meta_path = capture_dir / "meta.json"
+    import json
+
+    data = json.loads(meta_path.read_text(encoding="utf-8"))
+    del data["target"]
+    meta_path.write_text(json.dumps(data), encoding="utf-8")
+
+    assert list_pending(tmp_path)[0].target == "goal"

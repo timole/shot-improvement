@@ -1,5 +1,5 @@
 """Live "what is the laptop doing right now" status for the
-shot.timolehtonen.tech page (spec 120).
+snapshot.timolehtonen.tech page (spec 120).
 
 A tiny JSON blob (`status/latest.json`) in the same Azure container as
 the clips, rewritten at each stage of a recording: capture ended ->

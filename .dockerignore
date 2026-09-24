@@ -24,3 +24,7 @@ record.py
 requirements.txt
 README.md
 cloud_sync_tombstones.json
+# Spec 147: the Android app's own source + Gradle build output
+# (android/app/ alone is tens of MB of APKs/intermediates) - the server
+# image is Python-only and never needs any of it.
+android/

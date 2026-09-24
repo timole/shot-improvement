@@ -1,5 +1,5 @@
 """Azure Blob Storage backend for core.cloud_sync (spec 095) - the data
-store behind the new Azure-hosted gallery at shot.timolehtonen.tech.
+store behind the new Azure-hosted gallery at snapshot.timolehtonen.tech.
 Implements core.cloud_sync.Backend, which SyncWorker drives (spec 123:
 the only backend - Google Cloud Storage was removed).
 

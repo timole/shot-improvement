@@ -4,3 +4,5 @@ httpx==0.28.1
 PyJWT[crypto]==2.14.0
 azure-storage-blob==12.24.0
 azure-identity==1.19.0
+python-multipart==0.0.20  # spec 147: FastAPI's Form()/File() (POST /api/android/upload) need this
+imageio-ffmpeg==0.6.0  # spec 149: bundles a static ffmpeg binary - server/android_compose.py's composed-video pipeline

@@ -1,5 +1,5 @@
 """Microsoft Entra ID sign-in verification and a signed session cookie
-for the shot.timolehtonen.tech gallery (spec 095/096) - identity
+for the snapshot.timolehtonen.tech gallery (spec 095/096) - identity
 provider is Microsoft, not Google, by explicit request: no GCP
 dependency anywhere in this service, including for sign-in.
 

@@ -311,12 +311,23 @@ def test_app_js_is_served_without_a_session() -> None:
     assert resp.status_code == 200
 
 
+def test_sub_pages_serve_the_same_shell() -> None:
+    # Spec 148: /liikeratatallenteet and /puhelimen-laukaukset are the
+    # front page's two links - app.js itself branches on the path (see
+    # App()), so the server just serves the same shell for both, same as
+    # GET / above.
+    for path in ("/liikeratatallenteet", "/puhelimen-laukaukset"):
+        resp = client.get(path)
+        assert resp.status_code == 200, path
+        assert "text/html" in resp.headers["content-type"], path
+
+
 def test_redirect_uri_constant_matches_the_registered_app() -> None:
     # This exact string must match the Entra ID App Registration's
     # redirect URI - a drift here fails silently as a Microsoft-side
     # "redirect_uri_mismatch" error, not a local test failure, so it's
     # worth pinning explicitly.
-    assert REDIRECT_URI == "https://shot.timolehtonen.tech/api/login/callback"
+    assert REDIRECT_URI == "https://snapshot.timolehtonen.tech/api/login/callback"
 
 
 # --- GET /api/status (spec 120) --------------------------------------------
@@ -398,5 +409,5 @@ def test_app_apk_returns_503_on_other_azure_failures(monkeypatch: pytest.MonkeyP
 def test_page_shell_scripts_and_install_page_are_revalidated_not_heuristically_cached() -> None:
     # No Cache-Control let a phone keep serving an old app.js (no new
     # banner) for hours - these change per deploy without a versioned URL.
-    for path in ("/", "/app.js", "/android"):
+    for path in ("/", "/app.js", "/android", "/liikeratatallenteet", "/puhelimen-laukaukset"):
         assert client.get(path).headers["cache-control"] == "no-cache", path

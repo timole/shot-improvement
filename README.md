@@ -34,7 +34,7 @@ uploaded.
   clip is about 0.3 MB).
 - **Cloud and web page**: each raw and annotated clip is uploaded to
   Azure Blob Storage, and deleting a clip locally deletes it in the
-  cloud. The private page at <https://shot.timolehtonen.tech> (Microsoft
+  cloud. The private page at <https://snapshot.timolehtonen.tech> (Microsoft
   sign-in) lists the recordings. While the app is processing a new
   recording, an open page shows the fastest shot, a countdown, and then
   plays the newest clip automatically.

@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 #
-# spec 095: shot.timolehtonen.tech's gallery server, on Azure Container
+# spec 095: snapshot.timolehtonen.tech's gallery server, on Azure Container
 # Apps. Mirrors ai-timolehtonen-tech/deploy/gcp/Dockerfile's shape
 # (proven portable across Cloud Run and Container Apps unchanged) -
 # python:3.13-slim, non-root user, ENV PORT=8080. That last line is
