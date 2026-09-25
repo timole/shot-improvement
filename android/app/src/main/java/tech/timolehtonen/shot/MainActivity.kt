@@ -97,10 +97,12 @@ private sealed interface Screen {
 }
 
 // Spec 139: fixed shot-centred window, not shot-to-hit - an unpaired shot (no
-// audible hit) gets the same two seconds as a paired one, and the hit sound
-// itself is deliberately not guaranteed to be inside it.
+// audible hit) gets the same window as a paired one, and the hit sound itself
+// is deliberately not guaranteed to be inside it. Spec 158: POSTROLL_S bumped
+// 1.0 -> 3.0 (a 4s clip instead of 2s) - more room after the shot for the
+// puck's flight and the hit itself to fit on screen.
 private const val PREROLL_S = 1.0
-private const val POSTROLL_S = 1.0
+private const val POSTROLL_S = 3.0
 private const val SPECTRO_VISIBLE_S = 6.0 // long enough to show a shot and its hit together at most distances
 private const val SPECTRO_TICK_MS = 100L // ~10 fps - the scrolling comes from real time advancing, not a fast redraw
 private val SHOT_MARKER_COLOR = Color(0xFFFFEB3B)
@@ -235,7 +237,7 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
-     * Saves the WAV+JSON for one shot (named [stem]): a fixed two seconds,
+     * Saves the WAV+JSON for one shot (named [stem]): a fixed window,
      * [PREROLL_S] before the shot to [POSTROLL_S] after it - not
      * shot-to-hit. It plays back on tap in the history list regardless of
      * whether a hit was ever heard, and deliberately does not try to
