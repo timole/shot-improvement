@@ -13,12 +13,14 @@ import android.hardware.camera2.CaptureRequest
 import android.media.MediaRecorder
 import android.os.Handler
 import android.os.HandlerThread
+import android.os.SystemClock
 import android.util.Log
 import android.util.Range
 import android.view.Surface
 import java.io.File
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * One continuous camera recording (spec 140/141/144/145), the video
@@ -59,12 +61,20 @@ class CameraSession private constructor(
     // file itself (recorder.setOrientationHint) and reused by MainActivity
     // to orient the live preview the same way (spec 146).
     val sensorOrientation: Int,
-    // Seconds of MicSession's own clock (the same origin ShotRecord.shotT is
-    // measured against) that had already elapsed by the time this recording's
-    // own internal timeline started at 0 - what VideoDecoder subtracts from a
-    // shot's audio-clock window to get the recording-relative window to decode.
-    val offsetS: Double,
+    // First sensor exposure mapped onto AudioTimestamp's monotonic timebase.
+    private val firstFrameNanos: AtomicLong,
+    private val fallbackStartNanos: Long,
 ) {
+    // Video sample zero on the audio sample clock, set once capture finishes.
+    // Subtract this from an audio-clock window to obtain video-relative times.
+    var offsetS: Double = 0.0
+        private set
+
+    fun alignToAudio(audioStartNanos: Long) {
+        val videoStart = firstFrameNanos.get().takeIf { it != 0L } ?: fallbackStartNanos
+        offsetS = (videoStart - audioStartNanos) / 1e9
+        Log.i(TAG, "A/V alignment: offsetS=$offsetS sensorTimestamp=${firstFrameNanos.get() != 0L}")
+    }
     /** False when this session's fps needed the high-speed capture session -
      * see [open]'s own comment on why the live preview is dropped there.
      * MainActivity reads this to show a short caption instead of an
@@ -172,9 +182,10 @@ class CameraSession private constructor(
 
         /**
          * Opens the camera and starts recording continuously to [outputFile]
-         * until [close] - [sessionStartNanos] should be `System.nanoTime()`
-         * from right after `MicSession.open()` returned, so [offsetS] on the
-         * result reflects how much of a head start the audio clock already had.
+         * until [close]. [sessionStartNanos] is only a startup fallback;
+         * [alignToAudio] later derives [offsetS] from capture/sample timestamps.
+         * Open the microphone after this returns so its buffer cannot overflow
+         * while camera setup blocks the capture thread.
          * [previewSurfaceTexture] (spec 146), if given, is added as a second
          * output alongside the recording - if the capture session rejects
          * both surfaces together (some devices' high-speed modes are pickier
@@ -264,6 +275,16 @@ class CameraSession private constructor(
             var resultDevice: CameraDevice? = null
             var resultSession: CameraCaptureSession? = null
             var started = false
+            val firstFrameNanos = AtomicLong(0L)
+            var recorderStartNanos = sessionStartNanos
+            val sensorRealtime = chars.get(CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE) == CameraMetadata.SENSOR_INFO_TIMESTAMP_SOURCE_REALTIME
+            val bootToMonotonic = System.nanoTime() - SystemClock.elapsedRealtimeNanos()
+            val captureCallback = object : CameraCaptureSession.CaptureCallback() {
+                override fun onCaptureStarted(session: CameraCaptureSession, request: CaptureRequest, timestamp: Long, frameNumber: Long) {
+                    val monotonic = if (sensorRealtime) timestamp + bootToMonotonic else System.nanoTime()
+                    firstFrameNanos.compareAndSet(0L, monotonic)
+                }
+            }
             val latch = CountDownLatch(1)
             try {
                 manager.openCamera(cameraId, object : CameraDevice.StateCallback() {
@@ -279,13 +300,16 @@ class CameraSession private constructor(
                                             set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, bestRange)
                                             set(CaptureRequest.CONTROL_MODE, CameraMetadata.CONTROL_MODE_AUTO)
                                         }.build()
+                                        // Arm the recorder before supplying frames: first capture
+                                        // timestamp then corresponds to the MP4 timeline origin.
+                                        recorderStartNanos = System.nanoTime()
+                                        recorder.start()
                                         if (useHighSpeed && session is CameraConstrainedHighSpeedCaptureSession) {
                                             val burst = session.createHighSpeedRequestList(request)
-                                            session.setRepeatingBurst(burst, null, handler)
+                                            session.setRepeatingBurst(burst, captureCallback, handler)
                                         } else {
-                                            session.setRepeatingRequest(request, null, handler)
+                                            session.setRepeatingRequest(request, captureCallback, handler)
                                         }
-                                        recorder.start()
                                         started = true
                                         resultSession = session
                                     } catch (e: Exception) {
@@ -355,7 +379,7 @@ class CameraSession private constructor(
             Log.i(TAG, "camera open: id=$cameraId ${size.width}x${size.height} requestedFps=$targetFps " +
                 "fps=${bestRange.lower}-${bestRange.upper} highSpeed=$useHighSpeed sensorOrientation=$sensorOrientation " +
                 "preview=${previewSurface != null} offsetS=$offsetS -> ${outputFile.name}")
-            return CameraSession(device, session, recorder, thread, previewSurface, outputFile, size.width, size.height, bestRange.upper, sensorOrientation, offsetS)
+            return CameraSession(device, session, recorder, thread, previewSurface, outputFile, size.width, size.height, bestRange.upper, sensorOrientation, firstFrameNanos, recorderStartNanos)
         }
     }
 

@@ -5,6 +5,7 @@ import android.content.Context
 import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioRecord
+import android.media.AudioTimestamp
 import android.media.MediaRecorder
 import android.media.audiofx.AcousticEchoCanceler
 import android.media.audiofx.AudioEffect
@@ -27,6 +28,7 @@ class MicSession private constructor(
     val audioSource: String,
     val effects: String,
     private val fx: List<AudioEffect>,
+    private val fallbackStartNanos: Long,
 ) {
     companion object {
         private val SOURCES = listOf(
@@ -84,9 +86,10 @@ class MicSession private constructor(
                         continue
                     }
                     val (effects, fx) = disableEffects(record.audioSessionId)
+                    val startNanos = System.nanoTime()
                     record.startRecording()
                     Log.i(TAG, "mic open: source=$name rate=$rate effects=$effects")
-                    return MicSession(record, rate, name, effects, fx)
+                    return MicSession(record, rate, name, effects, fx, startNanos)
                 }
             }
             return null
@@ -95,11 +98,20 @@ class MicSession private constructor(
 
     private var clippedCount = 0L
     private var totalCount = 0L
+    private val origins = ArrayList<Long>()
+    /** Sample zero on the monotonic clock, independent of read/driver latency. */
+    val startTimeNanos: Long get() = if (origins.isEmpty()) fallbackStartNanos else origins.sorted()[origins.size / 2]
 
     /** Blocks until at least one sample is available; returns the count read into [dest], or <=0 on error. */
     fun read(dest: ShortArray): Int {
         val n = record.read(dest, 0, dest.size)
         if (n > 0) {
+            if (origins.size < 16) {
+                val stamp = AudioTimestamp()
+                if (record.getTimestamp(stamp, AudioTimestamp.TIMEBASE_MONOTONIC) == AudioRecord.SUCCESS && stamp.framePosition > 0) {
+                    origins.add(stamp.nanoTime - (stamp.framePosition * 1e9 / sampleRate).toLong())
+                }
+            }
             totalCount += n
             for (i in 0 until n) if (abs(dest[i].toInt()) >= 32000) clippedCount++
         }
@@ -109,6 +121,7 @@ class MicSession private constructor(
     val clippedFraction: Double get() = if (totalCount > 0) clippedCount.toDouble() / totalCount else 0.0
 
     fun close() {
+        Log.i(TAG, "audio origin: $startTimeNanos hardwareTimestamps=${origins.size}")
         record.stop()
         record.release()
         fx.forEach { it.release() }

@@ -17,10 +17,10 @@ class LiveDetectorTest {
     private val rate = 44100
     private val chunkSize = 4096 // a realistic AudioRecord read() size
 
-    private fun synth(events: List<Double>, durationS: Double, burstRms: Double = 8000.0, burstMs: Double = 15.0): ShortArray {
+    private fun synth(events: List<Double>, durationS: Double, burstRms: Double = 8000.0, burstMs: Double = 15.0, noiseRms: Double = 100.0): ShortArray {
         val rng = Random(0)
         val n = (durationS * rate).toInt()
-        val audio = DoubleArray(n) { rng.nextGaussian() * 100.0 }
+        val audio = DoubleArray(n) { rng.nextGaussian() * noiseRms }
         val burstLen = (burstMs / 1000 * rate).toInt()
         for (t in events) {
             val start = (t * rate).toInt()
@@ -125,6 +125,69 @@ class LiveDetectorTest {
             assertEquals(1, hits.size)
             assertEquals(speed, hits.single().speedKmh!!, 5.0)
         }
+    }
+
+    @Test
+    fun hitNearSlowWindowEdgeFinishesBeforeTimeout() {
+        val distance = 22.5
+        val gap = Geometry.hitDelayWindow(distance).second - 0.03
+        val hits = feedAll(LiveDetector(rate, distance), synth(listOf(1.0, 1.0 + gap), 5.0))
+            .filterIsInstance<LiveDetector.Event.Hit>()
+        assertEquals(1, hits.size)
+    }
+
+    @Test
+    fun earlyEchoDoesNotStealPendingLongShot() {
+        val hits = feedAll(LiveDetector(rate, 56.0), synth(listOf(1.0, 1.7, 1.0 + measuredDt(56.0, 100.0)), 6.0))
+            .filterIsInstance<LiveDetector.Event.Hit>()
+        assertEquals(1, hits.size)
+        assertEquals(100.0, hits.single().speedKmh!!, 1.5)
+    }
+
+    @Test
+    fun sixPairsAreDetectedAcrossOneSession() {
+        val times = (0 until 6).flatMap { listOf(1.0 + it * 4, 1.0 + it * 4 + measuredDt(22.5, 100.0)) }
+        val hits = feedAll(LiveDetector(rate, 22.5), synth(times, 25.0)).filterIsInstance<LiveDetector.Event.Hit>()
+        assertEquals(6, hits.size)
+        hits.forEach { assertEquals(100.0, it.speedKmh!!, 2.0) }
+    }
+
+    @Test
+    fun loneSnapIsNotInventedAsAPair() {
+        val events = feedAll(LiveDetector(rate, 22.5), synth(listOf(1.0), 5.0))
+        assertTrue(events.none { it is LiveDetector.Event.Hit })
+        assertEquals(1, events.filterIsInstance<LiveDetector.Event.Unpaired>().size)
+    }
+
+    @Test
+    fun continuousLowFrequencyNoiseDoesNotPair() {
+        val audio = ShortArray(rate * 5) { i -> (6000 * kotlin.math.sin(2 * Math.PI * 100 * i / rate)).toInt().toShort() }
+        assertTrue(feedAll(LiveDetector(rate, 22.5), audio).none { it is LiveDetector.Event.Hit })
+    }
+
+    @Test
+    fun weakImpulseOnlyGetsExtraSensitivityInsideAnExpectedHitWindow() {
+        val hitTime = 1.0 + measuredDt(22.5, 100.0)
+        val weak = synth(listOf(hitTime), 5.0, burstRms = 350.0, noiseRms = 0.0)
+        assertTrue(feedAll(LiveDetector(rate, 22.5), weak).none { it is LiveDetector.Event.Shot })
+        val audio = synth(listOf(1.0), 5.0, noiseRms = 5.0)
+        for (i in audio.indices) audio[i] = (audio[i] + weak[i]).toShort()
+        assertEquals(1, feedAll(LiveDetector(rate, 22.5), audio).filterIsInstance<LiveDetector.Event.Hit>().size)
+    }
+
+    @Test
+    fun stoppingFinishesPendingPairButDoesNotStartNewShots() {
+        val dt = measuredDt(22.5, 100.0)
+        val audio = synth(listOf(1.0, 1.0 + dt, 4.0, 4.0 + dt), 7.0)
+        val detector = LiveDetector(rate, 22.5)
+        val cut = (1.4 * rate).toInt()
+        feedAll(detector, audio.copyOfRange(0, cut))
+        assertTrue(detector.hasPendingShot)
+        detector.stopAcceptingShots()
+        val events = feedAll(detector, audio.copyOfRange(cut, audio.size))
+        assertEquals(1, events.filterIsInstance<LiveDetector.Event.Hit>().size)
+        assertTrue(events.none { it is LiveDetector.Event.Shot })
+        assertTrue(!detector.hasPendingShot)
     }
 
     @Test

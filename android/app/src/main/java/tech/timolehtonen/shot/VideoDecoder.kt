@@ -239,7 +239,7 @@ object VideoDecoder {
     // reports - what ShotDetailDialog's own applyPreviewTransform call needs,
     // the same way CameraSession.width/height already feed that function for
     // the live preview.
-    data class VideoMeta(val fps: Int, val frameCount: Int, val durationS: Double, val width: Int, val height: Int)
+    data class VideoMeta(val fps: Int, val frameCount: Int, val durationS: Double, val width: Int, val height: Int, val frameTimesS: List<Double>)
 
     fun probeVideoMeta(file: File): VideoMeta? {
         if (!file.isFile) return null
@@ -259,11 +259,13 @@ object VideoDecoder {
             val height = try { format.getInteger(MediaFormat.KEY_HEIGHT) } catch (e: Exception) { 0 }
             extractor.selectTrack(trackIndex)
             var frameCount = 0
+            val frameTimesS = ArrayList<Double>()
             var lastSampleTimeUs = 0L
             while (true) {
                 val t = extractor.sampleTime
                 if (t < 0) break
                 lastSampleTimeUs = t
+                frameTimesS.add(t / 1_000_000.0)
                 frameCount++
                 if (!extractor.advance()) break
             }
@@ -271,7 +273,7 @@ object VideoDecoder {
             // The true clip length is one frame's worth past the last sample's
             // own timestamp, not just lastSampleTimeUs itself.
             val durationS = (lastSampleTimeUs / 1_000_000.0) + (1.0 / fps)
-            VideoMeta(fps, frameCount, durationS, width, height)
+            VideoMeta(fps, frameCount, durationS, width, height, frameTimesS)
         } catch (e: Exception) {
             Log.w(TAG, "VideoDecoder: probeVideoMeta failed for ${file.name}", e)
             null

@@ -83,9 +83,14 @@ class LiveDetector(val sampleRate: Int, val distanceM: Double) {
     private var candidateBestRms = 0.0
 
     private var pendingShotS: Double? = null
+    private var acceptingShots = true
+    val hasPendingShot: Boolean get() = pendingShotS != null
+    fun stopAcceptingShots() { acceptingShots = false }
     private val recentAcceptedS = ArrayDeque<Double>() // trailing 1 s, for the noise guard
 
     private val hitWindow = Geometry.hitDelayWindow(distanceM)
+
+    val durationS: Double get() = buffer.totalSamples.toDouble() / sampleRate
 
     // Spec 128's shrink, carried over from core/claps.py: a short distance's
     // own hit can arrive sooner than the fixed refractory period would allow.
@@ -122,7 +127,12 @@ class LiveDetector(val sampleRate: Int, val distanceM: Double) {
 
         if (windowTimeS < refractoryUntilS) return
 
-        val threshold = maxOf(Claps.floorRms(), Claps.median(rmsHistory.toDoubleArray()) * Claps.THRESHOLD_MEDIAN_RATIO)
+        // Only a physically timed return hit gets 3 dB more headroom. Keep
+        // the local-noise and spectral gates unchanged; starting a new shot
+        // still requires the original floor.
+        val expectingHit = pendingShotS?.let { windowTimeS - it in hitWindow.first..hitWindow.second } == true
+        val floor = Claps.floorRms() * if (expectingHit) 0.707 else 1.0
+        val threshold = maxOf(floor, Claps.median(rmsHistory.toDoubleArray()) * Claps.THRESHOLD_MEDIAN_RATIO)
         val start = candidateStartS
         if (start == null) {
             if (rms > threshold) {
@@ -159,10 +169,13 @@ class LiveDetector(val sampleRate: Int, val distanceM: Double) {
         val passProminence = candidateBestRms >= Claps.PROMINENCE_RATIO * Claps.median(localRms.toDoubleArray())
 
         val acceptedTimeS = candidateBestS
-        refractoryUntilS = acceptedTimeS + minSeparationS
         candidateStartS = null
 
         if (!passBand || !passProminence) return
+        // A tap/echo too early to be the hit must not steal the pending
+        // shot or suppress the real hit that follows it.
+        if (pendingShotS?.let { acceptedTimeS - it < hitWindow.first } == true) return
+        refractoryUntilS = acceptedTimeS + minSeparationS
 
         recentAcceptedS.addLast(acceptedTimeS)
         while (recentAcceptedS.isNotEmpty() && recentAcceptedS.first() < acceptedTimeS - 1.0) recentAcceptedS.removeFirst()
@@ -176,6 +189,7 @@ class LiveDetector(val sampleRate: Int, val distanceM: Double) {
     private fun acceptClap(t: Double, events: MutableList<Event>) {
         val pending = pendingShotS
         if (pending == null) {
+            if (!acceptingShots) return
             pendingShotS = t
             events.add(Event.Shot(t))
             return
@@ -186,8 +200,8 @@ class LiveDetector(val sampleRate: Int, val distanceM: Double) {
             pendingShotS = null
         } else {
             events.add(Event.Unpaired(pending))
-            pendingShotS = t
-            events.add(Event.Shot(t))
+            pendingShotS = if (acceptingShots) t else null
+            if (acceptingShots) events.add(Event.Shot(t))
         }
     }
 
@@ -195,6 +209,9 @@ class LiveDetector(val sampleRate: Int, val distanceM: Double) {
         val pending = pendingShotS ?: return
         val nowS = processedSamples.toDouble() / sampleRate
         if (nowS - pending > hitWindow.second) {
+            // The hit can already be in the buffer but still waiting for
+            // its 150 ms spectral/peak lookahead to complete.
+            if (candidateStartS?.let { it - pending <= hitWindow.second } == true) return
             events.add(Event.Unpaired(pending))
             pendingShotS = null
         }

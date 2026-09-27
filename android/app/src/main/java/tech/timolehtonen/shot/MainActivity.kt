@@ -101,11 +101,10 @@ private sealed interface Screen {
 
 // Spec 139: fixed shot-centred window, not shot-to-hit - an unpaired shot (no
 // audible hit) gets the same window as a paired one, and the hit sound itself
-// is deliberately not guaranteed to be inside it. Spec 158: POSTROLL_S bumped
-// 1.0 -> 3.0 (a 4s clip instead of 2s) - more room after the shot for the
-// puck's flight and the hit itself to fit on screen.
+// is deliberately not guaranteed to be inside it. Spec 160: four seconds
+// after the shot, with a matching WAV tail even when listening is stopped.
 private const val PREROLL_S = 1.0
-private const val POSTROLL_S = 3.0
+private const val POSTROLL_S = 4.0
 private const val SPECTRO_VISIBLE_S = 6.0 // long enough to show a shot and its hit together at most distances
 private const val SPECTRO_TICK_MS = 100L // ~10 fps - the scrolling comes from real time advancing, not a fast redraw
 private val SHOT_MARKER_COLOR = Color(0xFFFFEB3B)
@@ -427,19 +426,8 @@ class MainActivity : ComponentActivity() {
             val recordingDev = devMode // locked in for the session, same as distanceM
             val fps = targetFps // spec 141: likewise locked in for the session
             thread(name = "shot-listen") {
-                val mic = MicSession.open(this@MainActivity)
-                if (mic == null) {
-                    postState {
-                        listeningFlag = false
-                        listenState = ListenState.Idle
-                        errorText = "Mikrofonia ei voitu avata."
-                    }
-                    return@thread
-                }
-                // Spec 145: the whole session records to one file, [sessionStartNanos]
-                // (captured right after the mic opened) is the audio clock's zero point -
-                // CameraSession measures its own offsetS from it, so a shot's shotT (on
-                // the audio clock) can later be converted to this recording's own timeline.
+                // Camera setup precedes microphone capture. Hardware timestamps
+                // align the two sample clocks after capture (spec 160).
                 val sessionStartNanos = System.nanoTime()
                 // Spec 140: video is an enhancement, not required to measure speed - if the
                 // camera permission was declined or no camera opens, listening still proceeds
@@ -465,11 +453,26 @@ class MainActivity : ComponentActivity() {
                         previewUnavailable = !camera.hasLivePreview
                     }
                 }
+                // Open the mic only once slow camera setup is complete. Reading
+                // must start immediately: its small native buffer cannot hold
+                // seconds of camera startup without dropping audio samples.
+                val mic = MicSession.open(this@MainActivity)
+                if (mic == null) {
+                    camera?.close()
+                    postState {
+                        listeningFlag = false
+                        listenState = ListenState.Idle
+                        errorText = "Mikrofonia ei voitu avata."
+                    }
+                    return@thread
+                }
                 // Spec 145: which shots need a video snippet, decided as they happen but
                 // only actually extracted once the session's recording is finalised (see
                 // extractPendingVideoSnippets) - a MediaRecorder-written file isn't safely
                 // seekable while still being recorded to.
                 val pendingVideoShots = mutableListOf<Pair<ShotRecord, String>>()
+                val pendingAudioShots = mutableListOf<Pair<ShotRecord, String>>()
+                var captureUntilS = 0.0
                 // Spec 147: which shots to upload to snapshot.timolehtonen.tech once this
                 // session ends - tracked separately from pendingVideoShots (populated
                 // whenever the shot isn't a dev one, not just when there's a camera),
@@ -489,23 +492,30 @@ class MainActivity : ComponentActivity() {
                 fun persist(record: ShotRecord) {
                     if (!recordingDev) ShotHistory.append(historyFile, record) // spec 139: dev shots never touch disk history
                     val stem = record.snippetFile!!.removeSuffix(".wav")
-                    saveSnippet(detector, record, stem)
+                    pendingAudioShots.add(record to stem)
+                    captureUntilS = maxOf(captureUntilS, record.shotT + POSTROLL_S)
                     if (camera != null) pendingVideoShots.add(record to stem)
                     if (!recordingDev) pendingUploads.add(record to stem) // spec 147: dev shots never leave the phone
                 }
 
-                while (listeningFlag) {
+                while (listeningFlag || detector.durationS < captureUntilS || detector.hasPendingShot) {
                     val n = mic.read(chunk)
-                    if (n <= 0) {
-                        Thread.sleep(5)
-                        continue
+                    if (n < 0) {
+                        Log.w(TAG, "Microphone read failed: $n")
+                        break
                     }
+                    if (n == 0) continue
                     spectro.feed(chunk, n)
-                    for (event in detector.feed(chunk, n)) {
+                    if (!listeningFlag) detector.stopAcceptingShots()
+                    val events = detector.feed(chunk, n)
+                    for (event in events) {
                         when (event) {
-                            is LiveDetector.Event.Shot -> postState {
-                                listenState = ListenState.AwaitingHit(event.timeS)
-                                markers = markers + SpectroMarker(event.timeS, "Laukaus", SHOT_MARKER_COLOR)
+                            is LiveDetector.Event.Shot -> {
+                                captureUntilS = maxOf(captureUntilS, event.timeS + POSTROLL_S)
+                                postState {
+                                    listenState = ListenState.AwaitingHit(event.timeS)
+                                    markers = markers + SpectroMarker(event.timeS, "Laukaus", SHOT_MARKER_COLOR)
+                                }
                             }
                             is LiveDetector.Event.Hit -> {
                                 shotIndex++
@@ -543,10 +553,29 @@ class MainActivity : ComponentActivity() {
                             }
                         }
                     }
+                    val ready = pendingAudioShots.filter { detector.durationS >= it.first.shotT + POSTROLL_S }
+                    for ((record, stem) in ready) saveSnippet(detector, record, stem)
+                    pendingAudioShots.removeAll(ready.toSet())
                 }
+                // Save only after the full tail exists. The old immediate save
+                // silently truncated WAVs at hit confirmation, unlike video.
+                for ((record, stem) in pendingAudioShots) saveSnippet(detector, record, stem)
                 postState { liveSpectrogram = null; previewHolder = null; previewUnavailable = false }
+                camera?.alignToAudio(mic.startTimeNanos)
                 mic.close()
                 camera?.close() // finalises videoFile so it's safely seekable
+                // The latest dev session is a diagnostic fixture, never uploaded;
+                // startup cleanup removes it with other dev recordings.
+                if (recordingDev) {
+                    val dir = ShotFiles.recordingsDir(this@MainActivity)
+                    ShotFiles.writeWav(File(dir, "dev-session.wav"), detector.snapshotSeconds(0.0, detector.durationS), detector.sampleRate)
+                    camera?.outputFile?.takeIf { it.isFile }?.copyTo(File(dir, "dev-session.mp4"), overwrite = true)
+                    File(dir, "dev-session.json").writeText(JSONObject()
+                        .put("audioStartNanos", mic.startTimeNanos)
+                        .put("videoOffsetS", camera?.offsetS)
+                        .put("fps", camera?.fps)
+                        .put("durationS", detector.durationS).toString(2))
+                }
                 // Spec 153: was silent (straight back to ListenState.Idle, set by
                 // stopListening() the instant the button was tapped) while trimming
                 // ran invisibly in the background - now the UI shows 0-100% for
@@ -712,7 +741,7 @@ class MainActivity : ComponentActivity() {
                     lastResult?.let { r ->
                         Spacer(Modifier.height(4.dp))
                         Text(
-                            r.speedKmh?.let { "Nopeus: ${Math.round(it)} km/h" } ?: "Osumaa ei kuulunut.",
+                            r.speedKmh?.let { "Nopeus: ${Math.round(it)} km/h" } ?: "Osumaa ei tunnistettu.",
                             fontSize = 32.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center,
                         )
                     }
@@ -966,6 +995,34 @@ private fun ShotDetailDialog(
     // The one playback clock: what the spectrogram line, and (if any) the shown
     // video frame, are both derived from - not each control's own local state.
     var currentTimeS by remember(record) { mutableStateOf(0.0) }
+    var playbackRequest by remember(record) { mutableStateOf(0) }
+
+    fun startPlaybackAt(positionS: Double) {
+        val audio = mediaPlayer ?: return
+        val video = videoPlayer
+        val request = ++playbackRequest
+        playing = false
+        if (audio.isPlaying) audio.pause()
+        if (video?.isPlaying == true) video.pause()
+        val readyPlayers = mutableSetOf<MediaPlayer>()
+        fun ready(player: MediaPlayer) {
+            if (request != playbackRequest) return
+            readyPlayers.add(player)
+            if (readyPlayers.size == if (video == null) 1 else 2) {
+                audio.setOnSeekCompleteListener(null)
+                video?.setOnSeekCompleteListener(null)
+                audio.start()
+                video?.start()
+                playing = true
+            }
+        }
+        audio.setOnSeekCompleteListener { ready(it) }
+        video?.setOnSeekCompleteListener { ready(it) }
+        val ms = FrameTimeline.playerPositionMs(positionS)
+        audio.seekTo(ms, MediaPlayer.SEEK_CLOSEST)
+        video?.seekTo(ms, MediaPlayer.SEEK_CLOSEST)
+    }
+
     // Spec 152: the speed row (five TextButtons) pushed "Sulje" almost off
     // the bottom of a phone screen - a dropdown behind one small button
     // takes the same vertical space as any other single control row.
@@ -1062,17 +1119,24 @@ private fun ShotDetailDialog(
             null
         }
         player?.setOnCompletionListener {
+            playbackRequest++
             playing = false
+            videoPlayer?.pause()
             currentTimeS = 0.0
             player.seekTo(0)
+            videoPlayer?.seekTo(0)
             val next = latestNextRecord.value
             if (latestAutoAdvance.value && next != null) latestOnAdvance.value(next)
         }
         mediaPlayer = player
-        if (player != null) {
-            player.start()
-            playing = true
-        }
+    }
+
+    // Start together only after BOTH preparations finish. PlaybackParams can
+    // implicitly start a paused player, so their effects below pause it again.
+    LaunchedEffect(record, mediaPlayer, videoPlayer) {
+        val audio = mediaPlayer ?: return@LaunchedEffect
+        if (videoFile != null && videoPlayer == null) return@LaunchedEffect
+        startPlaybackAt(0.0)
     }
 
     // One MediaPlayer per dialog instance - released whenever a different shot is
@@ -1103,6 +1167,7 @@ private fun ShotDetailDialog(
         val player = mediaPlayer ?: return@LaunchedEffect
         try {
             player.playbackParams = PlaybackParams().setSpeed(playbackSpeed).setPitch(1f)
+            if (!playing) player.pause()
         } catch (e: Exception) {
             Log.w(TAG, "ShotDetailDialog: playback speed $playbackSpeed rejected", e)
         }
@@ -1111,6 +1176,7 @@ private fun ShotDetailDialog(
         val player = videoPlayer ?: return@LaunchedEffect
         try {
             player.playbackParams = PlaybackParams().setSpeed(playbackSpeed)
+            if (!playing) player.pause()
         } catch (e: Exception) {
             Log.w(TAG, "ShotDetailDialog: video playback speed $playbackSpeed rejected", e)
         }
@@ -1126,15 +1192,12 @@ private fun ShotDetailDialog(
     fun togglePlayback() {
         val player = mediaPlayer ?: return
         if (playing) {
+            playbackRequest++
             player.pause()
             videoPlayer?.pause()
             playing = false
         } else {
-            player.seekTo((currentTimeS * 1000).toInt())
-            videoPlayer?.seekTo((currentTimeS * 1000).toInt())
-            player.start()
-            videoPlayer?.start()
-            playing = true
+            startPlaybackAt(currentTimeS)
         }
     }
 
@@ -1142,13 +1205,14 @@ private fun ShotDetailDialog(
     // audio, video and playback clock together, so nothing ever drifts from
     // what the next "play" would actually be audible/visible from.
     fun seekToS(targetS: Double, durationS: Double) {
+        playbackRequest++
         playing = false
         mediaPlayer?.pause()
         videoPlayer?.pause()
         val clamped = targetS.coerceIn(0.0, durationS)
         currentTimeS = clamped
         mediaPlayer?.seekTo((clamped * 1000).toInt())
-        videoPlayer?.seekTo((clamped * 1_000_000).toLong(), MediaPlayer.SEEK_CLOSEST)
+        videoPlayer?.seekTo(FrameTimeline.playerPositionMs(clamped), MediaPlayer.SEEK_CLOSEST)
     }
 
     var showCalculation by remember(record) { mutableStateOf(false) }
@@ -1171,13 +1235,13 @@ private fun ShotDetailDialog(
     }
     Dialog(onDismissRequest = onDismiss) {
         Surface(shape = MaterialTheme.shapes.medium) {
-            Column(modifier = Modifier.padding(16.dp)) {
+            Column(modifier = Modifier.padding(16.dp).verticalScroll(rememberScrollState())) {
                 Text(HISTORY_DATE_FORMAT.format(Date(record.timestampMs)), fontWeight = FontWeight.Bold)
                 Text(record.place, fontSize = 13.sp)
                 Spacer(Modifier.height(4.dp))
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     Text(
-                        record.speedKmh?.let { "${Math.round(it)} km/h" } ?: "Osumaa ei kuulunut.",
+                        record.speedKmh?.let { "${Math.round(it)} km/h" } ?: "Osumaa ei tunnistettu.",
                         fontSize = 24.sp, fontWeight = FontWeight.Bold,
                     )
                     if (record.hitT != null) {
@@ -1223,8 +1287,8 @@ private fun ShotDetailDialog(
                                 modifier = Modifier.fillMaxWidth().aspectRatio(1f).background(Color.Black),
                                 onSurfaceReady = { videoSurface = it },
                             )
-                            val frameIndex = (currentTimeS * meta.fps).roundToInt().coerceIn(0, meta.frameCount - 1)
-                            Text("ruutu ${frameIndex + 1}/${meta.frameCount}   ${"%.3f".format(frameIndex / meta.fps.toDouble())} s", fontSize = 12.sp)
+                            val frameIndex = FrameTimeline.indexAt(meta.frameTimesS, currentTimeS)
+                            Text("ruutu ${frameIndex + 1}/${meta.frameCount}   ${"%.3f".format(meta.frameTimesS[frameIndex])} s", fontSize = 12.sp)
                         } else if (videoFile != null) {
                             // Trimmed but not probed yet (or probing failed) - a blank box the
                             // right shape rather than nothing, so the layout doesn't jump once
@@ -1234,12 +1298,11 @@ private fun ShotDetailDialog(
                         SpectrogramCanvas(columns, times, durationS, loadedWav.sampleRate, durationS, markers, Modifier.fillMaxWidth())
                         Spacer(Modifier.height(4.dp))
                         if (videoFile != null && meta != null) {
-                            val frameS = 1.0 / meta.fps
                             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                                 TextButton(onClick = { seekToS(currentTimeS - 1.0, durationS) }) { Text("-1 s") }
-                                TextButton(onClick = { seekToS(currentTimeS - frameS, durationS) }) { Text("◀") }
+                                TextButton(onClick = { seekToS(FrameTimeline.step(meta.frameTimesS, currentTimeS, -1), durationS) }) { Text("◀") }
                                 TextButton(onClick = ::togglePlayback) { Text(if (playing) "⏸" else "▶") }
-                                TextButton(onClick = { seekToS(currentTimeS + frameS, durationS) }) { Text("▶|") }
+                                TextButton(onClick = { seekToS(FrameTimeline.step(meta.frameTimesS, currentTimeS, 1), durationS) }) { Text("▶|") }
                                 TextButton(onClick = { seekToS(currentTimeS + 1.0, durationS) }) { Text("+1 s") }
                             }
                         } else {
