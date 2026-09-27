@@ -20,6 +20,9 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -1148,16 +1151,39 @@ private fun ShotDetailDialog(
         videoPlayer?.seekTo((clamped * 1_000_000).toLong(), MediaPlayer.SEEK_CLOSEST)
     }
 
+    var showCalculation by remember(record) { mutableStateOf(false) }
+    if (showCalculation) {
+        AlertDialog(
+            onDismissRequest = { showCalculation = false },
+            title = { Text("Nopeuden laskenta") },
+            text = {
+                record.hitT?.let { hitT ->
+                    Text(
+                        Geometry.speedExplanation(record.shotT, hitT, record.distanceM),
+                        modifier = Modifier.verticalScroll(rememberScrollState()),
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showCalculation = false }) { Text("Sulje") }
+            },
+        )
+    }
     Dialog(onDismissRequest = onDismiss) {
         Surface(shape = MaterialTheme.shapes.medium) {
             Column(modifier = Modifier.padding(16.dp)) {
                 Text(HISTORY_DATE_FORMAT.format(Date(record.timestampMs)), fontWeight = FontWeight.Bold)
                 Text(record.place, fontSize = 13.sp)
                 Spacer(Modifier.height(4.dp))
-                Text(
-                    record.speedKmh?.let { "${Math.round(it)} km/h" } ?: "Osumaa ei kuulunut.",
-                    fontSize = 24.sp, fontWeight = FontWeight.Bold,
-                )
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text(
+                        record.speedKmh?.let { "${Math.round(it)} km/h" } ?: "Osumaa ei kuulunut.",
+                        fontSize = 24.sp, fontWeight = FontWeight.Bold,
+                    )
+                    if (record.hitT != null) {
+                        TextButton(onClick = { showCalculation = true }) { Text("Laskukaava") }
+                    }
+                }
                 Spacer(Modifier.height(8.dp))
                 val loadedWav = wav
                 when {

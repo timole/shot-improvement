@@ -118,6 +118,16 @@ class LiveDetectorTest {
     }
 
     @Test
+    fun fastShortShotAndLongShotIncludeSoundDelay() {
+        for ((distance, speed) in listOf(10.0 to 150.0, 56.0 to 100.0)) {
+            val audio = synth(listOf(1.0, 1.0 + measuredDt(distance, speed)), 6.0)
+            val hits = feedAll(LiveDetector(rate, distance), audio).filterIsInstance<LiveDetector.Event.Hit>()
+            assertEquals(1, hits.size)
+            assertEquals(speed, hits.single().speedKmh!!, 5.0)
+        }
+    }
+
+    @Test
     fun silenceProducesNoEvents() {
         assertTrue(feedAll(LiveDetector(rate, 22.5), ShortArray(rate * 3)).isEmpty())
     }
