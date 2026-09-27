@@ -37,6 +37,17 @@ def main() -> int:
     service = BlobServiceClient(
         account_url=f"https://{STORAGE_ACCOUNT}.blob.core.windows.net",
         credential=DefaultAzureCredential(),
+        # A ~9MB APK is well under the SDK's default 64MB single-put
+        # threshold, so without this it goes up as ONE big PUT - fine on
+        # a good connection, but a single flaky/slow link (seen
+        # repeatedly here: "Connection aborted... write operation timed
+        # out", same failure on three separate full-process retries)
+        # has no way to make partial progress or retry just the part
+        # that failed. Forcing a smaller block size makes every upload
+        # go through the chunked path instead, each block independently
+        # retried by the SDK's own retry policy.
+        max_single_put_size=4 * 1024 * 1024,
+        max_block_size=4 * 1024 * 1024,
     )
     blob = service.get_container_client(CONTAINER).get_blob_client(APK_BLOB_NAME)
     with open(args.apk, "rb") as f:
@@ -44,6 +55,8 @@ def main() -> int:
             f,
             overwrite=True,
             content_settings=ContentSettings(content_type="application/vnd.android.package-archive"),
+            max_concurrency=4,
+            connection_timeout=120,
         )
     print(f"Uploaded {args.apk.name} ({args.apk.stat().st_size / 1e6:.1f} MB) -> {APK_BLOB_NAME}")
     print("Live at https://snapshot.timolehtonen.tech/app.apk (install page: /android)")
