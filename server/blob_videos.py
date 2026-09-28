@@ -1,5 +1,5 @@
 """Azure Blob Storage-backed video listing/reading for the
-snapshot.timolehtonen.tech gallery (spec 095) - this server's read side of
+snapshotter.timolehtonen.tech gallery (spec 095) - this server's read side of
 what core/azure_sync.py writes from the laptop.
 
 Deliberately does NOT import anything from core/ - core/recorder.py

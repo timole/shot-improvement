@@ -8,7 +8,7 @@ import java.net.URL
 import java.util.UUID
 
 /**
- * Uploads one shot's video/audio/metadata to snapshot.timolehtonen.tech
+ * Uploads one shot's video/audio/metadata to snapshotter.timolehtonen.tech
  * (spec 147 - "upload the videos and audio to Azure... the user can
  * download videos there"). A plain multipart/form-data POST via
  * `HttpURLConnection`, hand-rolled rather than pulling in an HTTP
@@ -32,7 +32,7 @@ import java.util.UUID
  * upload succeeding, and there's no retry queue in this version.
  */
 object CloudUploader {
-    private const val UPLOAD_URL = "https://snapshot.timolehtonen.tech/api/android/upload"
+    private const val UPLOAD_URL = "https://snapshotter.timolehtonen.tech/api/android/upload"
     private const val UPLOAD_TOKEN = "JsdKQbKoy2vncezuPBeHDjJMGmvAKNdjHbSRqvdoCsQ"
     private const val CONNECT_TIMEOUT_MS = 15_000
     private const val READ_TIMEOUT_MS = 30_000

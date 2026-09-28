@@ -8,7 +8,7 @@
          speed from audio alone, so this is not android:required="true". -->
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
-    <!-- Spec 147: uploading a shot's video/audio to snapshot.timolehtonen.tech
+    <!-- Spec 147: uploading a shot's video/audio to snapshotter.timolehtonen.tech
          after it's decoded locally - best-effort (CloudUploader swallows
          any failure), so a phone with no network still measures speed and
          keeps everything it already had locally either way. -->
@@ -16,7 +16,7 @@
 
     <application
         android:allowBackup="true"
-        android:label="Snapshot"
+        android:label="Snapshotter"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">

@@ -330,7 +330,7 @@ class MainActivity : ComponentActivity() {
     }
 
     /** Uploads every non-dev shot from this session to
-     * snapshot.timolehtonen.tech (spec 147), once its local files are ready -
+     * snapshotter.timolehtonen.tech (spec 147), once its local files are ready -
      * on its own thread so a slow or absent network can't hold up
      * anything else. Whatever [CloudUploader.uploadShot] finds on disk for
      * a stem is whatever gets sent - a camera-less session simply has no
@@ -473,7 +473,7 @@ class MainActivity : ComponentActivity() {
                 val pendingVideoShots = mutableListOf<Pair<ShotRecord, String>>()
                 val pendingAudioShots = mutableListOf<Pair<ShotRecord, String>>()
                 var captureUntilS = 0.0
-                // Spec 147: which shots to upload to snapshot.timolehtonen.tech once this
+                // Spec 147: which shots to upload to snapshotter.timolehtonen.tech once this
                 // session ends - tracked separately from pendingVideoShots (populated
                 // whenever the shot isn't a dev one, not just when there's a camera),
                 // so an audio-only session still uploads its audio.
@@ -931,7 +931,7 @@ private fun VersionDialog(context: Context, onDismiss: () -> Unit) {
     Dialog(onDismissRequest = onDismiss) {
         Surface(shape = MaterialTheme.shapes.medium) {
             Column(modifier = Modifier.padding(16.dp)) {
-                Text("Snapshot", fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                Text("Snapshotter", fontSize = 20.sp, fontWeight = FontWeight.Bold)
                 Text(info)
                 Spacer(Modifier.height(12.dp))
                 Button(onClick = onDismiss, modifier = Modifier.fillMaxWidth()) { Text("Sulje") }

@@ -1,6 +1,6 @@
 """Azure Blob Storage for the Android app's own shots (spec 147) -
 upload (phone -> server -> blob, POST /api/android/upload) and read
-(server -> browser, for snapshot.timolehtonen.tech's download page) both
+(server -> browser, for snapshotter.timolehtonen.tech's download page) both
 live here, in the SAME "clips" container as the desktop gallery's own
 clips but under the "android/" prefix, so the two features can't
 collide on a blob name. Deliberately a separate module from

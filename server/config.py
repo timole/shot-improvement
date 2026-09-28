@@ -1,4 +1,4 @@
-"""Fail-fast env-var config for the snapshot.timolehtonen.tech gallery
+"""Fail-fast env-var config for the snapshotter.timolehtonen.tech gallery
 (spec 095/096). Plain os.environ.get, raising AT IMPORT TIME when a
 required value is missing rather than silently degrading - a missing
 secret surfacing as an opaque 500 on the very first sign-in attempt is

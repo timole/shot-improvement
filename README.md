@@ -1,4 +1,4 @@
-# shot-improvement
+# Snapshotter
 
 A Windows desktop app for reviewing ice-hockey shots. It films practice
 with a webcam and microphone, detects each shot from the sound of the
@@ -34,7 +34,7 @@ uploaded.
   clip is about 0.3 MB).
 - **Cloud and web page**: each raw and annotated clip is uploaded to
   Azure Blob Storage, and deleting a clip locally deletes it in the
-  cloud. The private page at <https://snapshot.timolehtonen.tech> (Microsoft
+  cloud. The private page at <https://snapshotter.timolehtonen.tech> (Microsoft
   sign-in) lists the recordings. While the app is processing a new
   recording, an open page shows the fastest shot, a countdown, and then
   plays the newest clip automatically.
@@ -57,7 +57,7 @@ signed in (`az login`) for cloud sync.
 First-time setup, from your home directory in PowerShell:
 
 ```
-cd ~\Documents\Projektit\shot-improvement
+cd ~\Documents\Projektit\snapshotter
 python -m venv venv
 venv\Scripts\pip install -r requirements.txt
 ```
@@ -65,7 +65,7 @@ venv\Scripts\pip install -r requirements.txt
 Start the app:
 
 ```
-cd ~\Documents\Projektit\shot-improvement
+cd ~\Documents\Projektit\snapshotter
 venv\Scripts\python gui.py
 ```
 

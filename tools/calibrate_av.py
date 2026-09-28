@@ -1,6 +1,6 @@
 """Local primary-screen flash / speaker impulse fixture for a phone at 240 fps.
 
-Run while Snapshot records in DEV mode, at 22.5 m. Six pairs, with a
+Run while Snapshotter records in DEV mode, at 22.5 m. Six pairs, with a
 0.877 s gap (100 km/h including sound return), start after five seconds.
 The window closes automatically. Escape also stops it. Output uses the
 speaker DAC clock, not PlaySound launch time. Display refresh adds up to
@@ -46,7 +46,7 @@ def main():
         cursor += n
 
     root = tk.Tk()
-    root.title("Snapshot 240 fps calibration")
+    root.title("Snapshotter 240 fps calibration")
     root.geometry(f"{root.winfo_screenwidth()}x{root.winfo_screenheight()}+0+0")
     root.overrideredirect(True)
     root.attributes("-topmost", True)

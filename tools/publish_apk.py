@@ -1,5 +1,5 @@
 """Uploads the built Android APK to Azure Blob Storage, where the gallery
-server serves it at https://snapshot.timolehtonen.tech/app.apk (spec 136).
+server serves it at https://snapshotter.timolehtonen.tech/app.apk (spec 136).
 
     python tools/publish_apk.py                      # the debug build
     python tools/publish_apk.py path/to/other.apk
@@ -59,7 +59,7 @@ def main() -> int:
             connection_timeout=120,
         )
     print(f"Uploaded {args.apk.name} ({args.apk.stat().st_size / 1e6:.1f} MB) -> {APK_BLOB_NAME}")
-    print("Live at https://snapshot.timolehtonen.tech/app.apk (install page: /android)")
+    print("Live at https://snapshotter.timolehtonen.tech/app.apk (install page: /android)")
     return 0
 
 

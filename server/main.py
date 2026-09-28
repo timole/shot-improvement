@@ -1,4 +1,4 @@
-"""FastAPI gallery for snapshot.timolehtonen.tech (spec 095/096) - v1: sign
+"""FastAPI gallery for snapshotter.timolehtonen.tech (spec 095/096) - v1: sign
 in with a Microsoft account, list the annotated clips currently in
 Azure Blob Storage, play one with a thumbnail, download it.
 
@@ -40,7 +40,7 @@ STATE_COOKIE_NAME = "shot_oauth_state"
 # must match exactly (this deployment only ever serves this one
 # domain, so hardcoding it is simpler and safer than trusting request
 # headers for it).
-REDIRECT_URI = "https://snapshot.timolehtonen.tech/api/login/callback"
+REDIRECT_URI = "https://snapshotter.timolehtonen.tech/api/login/callback"
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 # The page shell, app.js and the install page change with every deploy but
 # have no fingerprint in their URL. Without Cache-Control a browser may
@@ -48,6 +48,19 @@ WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 # page without a new banner). no-cache = always revalidate; the ETag keeps
 # that to a tiny 304.
 REVALIDATE = {"Cache-Control": "no-cache"}
+
+
+@app.middleware("http")
+async def canonical_web_domain(request: Request, call_next):
+    # Keep older APK uploads working, but move browser navigation before
+    # login starts so the OAuth state cookie belongs to the callback host.
+    if (request.url.hostname in {"snapshot.timolehtonen.tech", "shot.timolehtonen.tech"}
+            and request.method in {"GET", "HEAD"}
+            and (not request.url.path.startswith("/api/")
+                 or request.url.path == "/api/login/start")):
+        target = request.url.replace(scheme="https", netloc="snapshotter.timolehtonen.tech")
+        return RedirectResponse(str(target), status_code=308)
+    return await call_next(request)
 
 
 def _session_email(request: Request) -> Optional[str]:
@@ -408,15 +421,10 @@ def index_page() -> FileResponse:
     return FileResponse(WEB_DIR / "index.html", headers=REVALIDATE)
 
 
-@app.get("/liikeratatallenteet")
 @app.get("/puhelimen-laukaukset")
-def sub_page() -> FileResponse:
-    """Spec 148: both are the same page shell as GET / - app.js itself
-    branches on window.location.pathname (see App()) to decide which of
-    HomePage/GalleryPage/AndroidPage to render, the same way GET /android
-    below is a distinct static page rather than a third branch of app.js
-    (that one's public/unauthenticated, so it has to be separate)."""
-    return FileResponse(WEB_DIR / "index.html", headers=REVALIDATE)
+def old_phone_page() -> RedirectResponse:
+    """Preserve bookmarks after moving the phone gallery to the root."""
+    return RedirectResponse("/", status_code=308)
 
 
 @app.get("/app.js")

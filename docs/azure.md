@@ -51,21 +51,19 @@ Sweden Central:
   storage account, container registry or resource group in place,
   only recreate-and-migrate, which is a lot of real risk/effort for
   something nobody but the owner ever sees the name of.
-- Custom domain `snapshot.timolehtonen.tech` bound with a managed
-  (DigiCert) certificate - DNS at Vercel (`vercel dns add`): the
-  domain's existing CAA records needed a `0 issue "digicert.com"`
-  entry added alongside the GCP-side `pki.goog` one, or issuance
-  fails. `shot.timolehtonen.tech` (the original domain) is still
-  bound too, with its own still-valid cert, and still serves the app
-  fine - kept live deliberately as a transition safety net rather
-  than torn down in the same spec that changed the primary domain.
-  `server/main.py`'s `REDIRECT_URI` now points at the new domain only
-  (the Entra ID App Registration has both redirect URIs registered,
-  see below), so signing in from the old domain still completes, just
-  lands you on the new one afterwards. Retire the old domain
-  (`az containerapp hostname delete`, remove its DNS records and its
-  redirect URI from the App Registration) once nothing still links to
-  it.
+- Primary domain `snapshotter.timolehtonen.tech` (spec 161), with a managed
+  DigiCert certificate. DNS is at Vercel: `snapshotter` CNAME points to the
+  Container App ingress and `asuid.snapshotter` TXT contains its domain
+  verification ID. The existing `digicert.com` CAA permits issuance.
+  `snapshot.timolehtonen.tech` and `shot.timolehtonen.tech` remain bound:
+  browser navigation redirects to Snapshotter, while API endpoints stay
+  available for older installed APKs. Login starts on the canonical host
+  so the OAuth state cookie matches the callback domain. Entra has all
+  three callback URIs registered; new logins use Snapshotter.
+- The phone-shot gallery is now `/`; `/puhelimen-laukaukset` redirects there.
+  `/liikeratatallenteet` is removed. Existing desktop blobs and APIs remain.
+- GitHub repository: <https://github.com/timole/snapshotter>. Azure resource
+  names remain `shot-improvement`; the local checkout is `Projektit\snapshotter`.
 - **Sign-in is Microsoft Entra ID, not Google** (spec 096 - "let's not
   use GCP at all, only Azure") - App Registration `shot-improvement`
   (`AzureADandPersonalMicrosoftAccount`, so the owner's personal
