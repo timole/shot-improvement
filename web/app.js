@@ -14,7 +14,7 @@
 
 const { useEffect, useRef, useState } = React;
 
-const POLL_MS = 3000;
+const POLL_MS = 15000;
 
 function formatSize(bytes) {
   if (bytes == null) return "";
@@ -99,7 +99,7 @@ function AndroidShotList({ shots, onSelect }) {
           >
             <img
               className="bg-dark rounded flex-shrink-0"
-              src={`/api/android/thumbnail/${s.stem}`}
+              src={`/api/android/thumbnail/${s.stem}?v=${s.analysis_version || "original"}`}
               alt=""
               loading="lazy"
               width={32}
@@ -110,6 +110,7 @@ function AndroidShotList({ shots, onSelect }) {
               <span className="text-muted me-2">{formatRecordedAt(s.recorded_at)}</span>
               <span className="fw-semibold me-2">
                 {s.speed_kmh != null ? `${Math.round(s.speed_kmh)} km/h` : "Osumaa ei kuulunut."}
+                {s.top_hand_speed_kmh != null && <span title="Yläkäden nopeusarvio ennen kiekko-osumaa"> ({Math.round(s.top_hand_speed_kmh)} km/h)</span>}
               </span>
               {s.place && <span className="text-muted">{s.place}</span>}
             </div>
@@ -171,9 +172,9 @@ function AndroidShotDetail({
 
   useEffect(() => {
     let cancelled = false;
-    setMeta(null);
+    setMeta(shot?.playback || null);
     setFrameIndex(0);
-    fetch(`/api/android/composed-meta/${stem}`, { credentials: "same-origin" })
+    if (!shot?.playback) fetch(`/api/android/composed-meta/${stem}`, { credentials: "same-origin" })
       .then((r) => (r.ok ? r.json() : null))
       .then((body) => {
         if (!cancelled && body) setMeta(body);
@@ -182,7 +183,7 @@ function AndroidShotDetail({
     return () => {
       cancelled = true;
     };
-  }, [stem]);
+  }, [stem, shot?.analysis_version]);
 
   // Applied both right after this shot's <video> mounts (key={stem} makes
   // a fresh element every time) and whenever the speed selector changes
@@ -243,17 +244,28 @@ function AndroidShotDetail({
             {shot && shot.place && <p className="text-muted small mb-1">{shot.place}</p>}
             <p className="display-6 mb-3">
               {shot && shot.speed_kmh != null ? `${Math.round(shot.speed_kmh)} km/h` : "Osumaa ei kuulunut."}
+              {shot?.top_hand_speed_kmh != null && ` (${Math.round(shot.top_hand_speed_kmh)} km/h)`}
             </p>
+            {shot?.top_hand_speed_kmh != null && (
+              <p className="small text-muted">Yläkäsi: noin {Math.round(shot.top_hand_speed_kmh)} km/h ennen kiekko-osumaa.
+                Arvio kuvatason liikkeestä, pituus {Math.round(shot.height_m * 100)} cm; perspektiivi vaikuttaa tulokseen.</p>
+            )}
+            {shot?.analysis_version && shot.top_hand_speed_kmh == null && (
+              <p className="small text-muted">{shot.height_m
+                ? "Yläkäden nopeutta ei voitu arvioida luotettavasti tästä kuvakulmasta."
+                : "Yläkäden nopeusarvio odottaa pituuden ja yläkäden määritystä."}</p>
+            )}
             <video
+              preload="auto"
               ref={videoRef}
-              key={stem}
+              key={`${stem}-${shot?.analysis_version || "original"}`}
               className="w-100 bg-dark"
               controls
               autoPlay
               playsInline
               onEnded={handleEnded}
               onTimeUpdate={handleTimeUpdate}
-              src={`/api/android/composed/${stem}`}
+              src={`/api/android/composed/${stem}?v=${shot?.analysis_version || "original"}`}
             ></video>
             {meta && (
               <p className="text-muted small mt-1 mb-0">
@@ -305,7 +317,7 @@ function AndroidShotDetail({
                 // as what's already playing above (and the raw upload has
                 // no rotation metadata at all - see android_compose's own
                 // module docstring - so it would play sideways on its own).
-                <a className="btn btn-sm btn-outline-secondary" href={`/api/android/composed/${stem}`} download={`${stem}-composed.mp4`}>
+                <a className="btn btn-sm btn-outline-secondary" href={`/api/android/composed/${stem}?v=${shot?.analysis_version || "original"}`} download={`${stem}-composed.mp4`}>
                   Lataa video
                 </a>
               )}

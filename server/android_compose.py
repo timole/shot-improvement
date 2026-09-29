@@ -47,6 +47,8 @@ import logging
 import re
 import subprocess
 import uuid
+import threading
+from functools import wraps
 from pathlib import Path
 
 import imageio_ffmpeg
@@ -58,6 +60,17 @@ logger = logging.getLogger("shot_improvement_server")
 SPECTROGRAM_HEIGHT = 200
 PLAYHEAD_COLOR = "yellow"
 PLAYHEAD_WIDTH = 3
+_WORK_LOCKS = [threading.RLock() for _ in range(64)]
+
+
+def _single_flight(function):
+    @wraps(function)
+    def wrapped(stem):
+        # Video and metadata requests often arrive together. Only one may
+        # encode a cold clip; the second reuses the atomically published file.
+        with _WORK_LOCKS[hash(stem) % len(_WORK_LOCKS)]:
+            return function(stem)
+    return wrapped
 
 
 def _ffmpeg() -> str:
@@ -175,6 +188,7 @@ def _try_get_precomputed(stem: str, out_path: Path) -> Path | None:
         return None
 
 
+@_single_flight
 def compose_video(stem: str) -> Path:
     """Returns the cached composited .mp4 for `stem`, building it on a
     cache miss. Prefers a precomputed, hand-position-annotated version
@@ -316,6 +330,7 @@ def render_composed(video_path: Path | None, audio_path: Path, out_path: Path, *
     return out_path
 
 
+@_single_flight
 def thumbnail(stem: str) -> Path:
     """A single JPEG preview frame - the shot's own moment if it has
     video (same instant MainActivity.ShotFiles would show first when

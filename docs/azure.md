@@ -98,3 +98,15 @@ Sweden Central:
 az acr build --registry shotimprovementacr --image shot-improvement-server:<tag> --file server/Dockerfile --platform linux/amd64 .
 az containerapp update -n shot-improvement-server -g shot-improvement --image shotimprovementacr.azurecr.io/shot-improvement-server:<tag>
 ```
+
+## Precomputed phone playback (spec 162)
+
+The gallery uses the persisted `android/index.json` manifest, cached for
+15 seconds, with ETag-conditional merge/retry on uploads and analysis updates.
+`tools/process_shots.py` publishes versioned MP4/JPEG artifacts under
+`android/processed/` and playback metadata into the manifest. Original blobs
+remain intact. See [hand analysis](hand-analysis.md) for calibration and the
+explicit-stem / latest-30 workflow. Older shots keep the on-demand fallback.
+
+Run `node tools/build_web.cjs` after JSX changes before building the server;
+`web/app.bundle.js` is served at `/app.js` without browser-side Babel.

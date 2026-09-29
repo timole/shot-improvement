@@ -23,6 +23,12 @@ UPLOAD_TOKEN = "test-android-upload-token"  # matches conftest.py's SHOT_ANDROID
 VALID_STEM = "shot-20260922180735-1"
 
 
+@pytest.fixture(autouse=True)
+def isolate_persisted_index(monkeypatch):
+    monkeypatch.setattr("server.main.shot_index.find", lambda stem: None)
+    monkeypatch.setattr("server.main.shot_index.update", lambda rows: None)
+
+
 def _session_cookie() -> str:
     import server.config as config
 
@@ -152,9 +158,21 @@ def test_android_videos_list_requires_a_session() -> None:
     assert client.get("/api/android/videos").status_code == 401
 
 
+def test_precomputed_metadata_avoids_video_download_or_encoding(monkeypatch):
+    playback = {"duration_s": 5, "fps": 240, "frame_count": 1200}
+    monkeypatch.setattr("server.main.shot_index.find", lambda stem: {"playback": playback})
+    def unexpected(*args):
+        raise AssertionError("Precomputed metadata must not touch video bytes")
+    monkeypatch.setattr("server.main.android_compose.compose_video", unexpected)
+    monkeypatch.setattr("server.main.shot_index.artifact", unexpected)
+    response = client.get(f"/api/android/composed-meta/{VALID_STEM}", cookies={SESSION_COOKIE_NAME: _session_cookie()})
+    assert response.status_code == 200
+    assert response.json() == playback
+
+
 def test_android_videos_list_returns_what_android_blobs_reports(monkeypatch: pytest.MonkeyPatch) -> None:
     fake_shots = [{"stem": VALID_STEM, "recorded_at": "2026-09-22T18:07:35", "has_video": True, "has_audio": True, "video_size": 500_000}]
-    monkeypatch.setattr("server.main.android_blobs.list_shots", lambda: fake_shots)
+    monkeypatch.setattr("server.main.shot_index.list_shots", lambda: fake_shots)
     resp = client.get("/api/android/videos", cookies={SESSION_COOKIE_NAME: _session_cookie()})
     assert resp.status_code == 200
     assert resp.json() == {"shots": fake_shots}
@@ -164,7 +182,7 @@ def test_android_videos_list_returns_503_on_azure_failure(monkeypatch: pytest.Mo
     def raise_error():
         raise RuntimeError("container unreachable")
 
-    monkeypatch.setattr("server.main.android_blobs.list_shots", raise_error)
+    monkeypatch.setattr("server.main.shot_index.list_shots", raise_error)
     resp = client.get("/api/android/videos", cookies={SESSION_COOKIE_NAME: _session_cookie()})
     assert resp.status_code == 503
 

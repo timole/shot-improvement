@@ -304,6 +304,8 @@ def test_page_serves_html_without_a_session() -> None:
     resp = client.get("/")
     assert resp.status_code == 200
     assert "text/html" in resp.headers["content-type"]
+    assert '<script defer src="/app.js"></script>' in resp.text
+    assert 'text/babel' not in resp.text
 
 
 def test_app_js_is_served_without_a_session() -> None:

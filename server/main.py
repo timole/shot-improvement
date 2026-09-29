@@ -26,7 +26,7 @@ from azure.core.exceptions import ResourceNotFoundError
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, RedirectResponse, Response
 
-from . import android_blobs, android_compose, auth, blob_videos, config
+from . import android_blobs, android_compose, auth, blob_videos, config, shot_index
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)-7s %(name)s: %(message)s")
 logger = logging.getLogger("shot_improvement_server")
@@ -281,6 +281,18 @@ async def android_upload(
         audio_bytes = await audio.read() if audio is not None else None
         metadata_bytes = await metadata.read() if metadata is not None else None
         android_blobs.upload_shot(stem, video_bytes, audio_bytes, metadata_bytes)
+        import json
+        meta = json.loads(metadata_bytes) if metadata_bytes else {}
+        row = {"stem": stem, "recorded_at": android_blobs._recorded_at(stem)}
+        # A replacement upload must not keep playback/estimates from older bytes.
+        row.update(analysis_version=None, playback=None, top_hand_speed_kmh=None)
+        if video_bytes is not None:
+            row.update(has_video=True, video_size=len(video_bytes))
+        if audio_bytes is not None:
+            row["has_audio"] = True
+        if metadata_bytes is not None:
+            row.update(place=meta.get("place"), speed_kmh=meta.get("speedKmh"))
+        shot_index.update([row])
     except Exception:
         logger.exception("android_upload: failed for %s", stem)
         raise HTTPException(status_code=503, detail="Upload failed.")
@@ -292,7 +304,7 @@ def android_videos_list(request: Request) -> dict:
     if _session_email(request) is None:
         raise HTTPException(status_code=401, detail="Kirjaudu sisään.")
     try:
-        return {"shots": android_blobs.list_shots()}
+        return {"shots": shot_index.list_shots()}
     except Exception:
         logger.exception("Failed to list android shots")
         raise HTTPException(status_code=503, detail="Listaus epäonnistui.")
@@ -352,7 +364,7 @@ def android_composed_bytes(stem: str, request: Request) -> FileResponse:
     if not android_blobs.is_valid_stem(stem):
         raise HTTPException(status_code=404, detail="Videota ei löytynyt.")
     try:
-        path = android_compose.compose_video(stem)
+        path = shot_index.artifact(stem, "mp4") or android_compose.compose_video(stem)
     except (ResourceNotFoundError, OSError, ValueError):
         raise HTTPException(status_code=404, detail="Videota ei löytynyt.")
     except Exception:
@@ -380,7 +392,10 @@ def android_composed_meta(stem: str, request: Request) -> dict:
     if not android_blobs.is_valid_stem(stem):
         raise HTTPException(status_code=404, detail="Videota ei löytynyt.")
     try:
-        path = android_compose.compose_video(stem)
+        indexed = shot_index.find(stem)
+        if indexed and indexed.get("playback"):
+            return indexed["playback"]
+        path = shot_index.artifact(stem, "mp4") or android_compose.compose_video(stem)
         return {
             "duration_s": android_compose.probe_duration_s(path),
             "fps": android_compose.probe_fps(path),
@@ -403,7 +418,7 @@ def android_thumbnail_bytes(stem: str, request: Request) -> FileResponse:
     if not android_blobs.is_valid_stem(stem):
         raise HTTPException(status_code=404, detail="Kuvaa ei löytynyt.")
     try:
-        path = android_compose.thumbnail(stem)
+        path = shot_index.artifact(stem, "jpg") or android_compose.thumbnail(stem)
     except (ResourceNotFoundError, OSError, ValueError):
         raise HTTPException(status_code=404, detail="Kuvaa ei löytynyt.")
     except Exception:
@@ -429,7 +444,7 @@ def old_phone_page() -> RedirectResponse:
 
 @app.get("/app.js")
 def app_js() -> FileResponse:
-    return FileResponse(WEB_DIR / "app.js", media_type="text/javascript", headers=REVALIDATE)
+    return FileResponse(WEB_DIR / "app.bundle.js", media_type="text/javascript", headers=REVALIDATE)
 
 
 @app.get("/android")

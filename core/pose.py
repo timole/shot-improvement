@@ -116,6 +116,7 @@ class PoseDetector:
         rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
         result = self._landmarker.detect_for_video(mp_image, ts_ms)
+        self.last_landmarks = result.pose_landmarks
         h, w = frame_bgr.shape[:2]
         return palm_boxes_from_landmarks(result.pose_landmarks, w, h)
 
