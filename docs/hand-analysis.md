@@ -29,8 +29,8 @@ Versioned MP4/JPEG artifacts live at `android/processed/`. The gallery
 manifest `android/index.json` holds rows and precomputed playback metadata.
 Publication uploads both artifacts before committing their version to the
 manifest. ETag-conditional merge/retry prevents concurrent uploads and
-analysis publishers from losing one another's rows. Servers cache this
-manifest for 15 seconds. Existing nonprocessed shots retain the fallback
+analysis publishers from losing one another's rows. Servers warm this manifest before readiness and refresh it in the
+background every 15 seconds, serving the previous index during refresh. Existing nonprocessed shots retain the fallback
 encoder; a per-stem lock prevents video and metadata requests encoding the
 same shot simultaneously. Private authenticated routes are retained.
 

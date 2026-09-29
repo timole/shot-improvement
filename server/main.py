@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import logging
 import secrets as secrets_module
+from contextlib import asynccontextmanager
+import asyncio
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -31,7 +33,18 @@ from . import android_blobs, android_compose, auth, blob_videos, config, shot_in
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)-7s %(name)s: %(message)s")
 logger = logging.getLogger("shot_improvement_server")
 
-app = FastAPI()
+@asynccontextmanager
+async def lifespan(app):
+    # Load before readiness, so the first visitor doesn't pay Azure's cold
+    # credential/storage round trip. Later refreshes serve the previous index.
+    try:
+        await asyncio.to_thread(shot_index.list_shots)
+    except Exception:
+        logger.warning("Could not warm gallery index", exc_info=True)
+    yield
+
+
+app = FastAPI(lifespan=lifespan)
 
 SESSION_COOKIE_NAME = "shot_session"
 STATE_COOKIE_NAME = "shot_oauth_state"

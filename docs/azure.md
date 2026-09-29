@@ -101,7 +101,7 @@ az containerapp update -n shot-improvement-server -g shot-improvement --image sh
 
 ## Precomputed phone playback (spec 162)
 
-The gallery uses the persisted `android/index.json` manifest, cached for
+The gallery uses the persisted `android/index.json` manifest, warmed before readiness and refreshed in the background every
 15 seconds, with ETag-conditional merge/retry on uploads and analysis updates.
 `tools/process_shots.py` publishes versioned MP4/JPEG artifacts under
 `android/processed/` and playback metadata into the manifest. Original blobs

@@ -20,6 +20,20 @@ def test_gallery_reads_manifest_once_for_repeated_polls(monkeypatch):
     assert len(calls) == 1
 
 
+def test_expired_gallery_serves_stale_without_waiting_for_refresh(monkeypatch):
+    started = []
+    monkeypatch.setattr(shot_index, "_cached", [{"stem": "old"}])
+    monkeypatch.setattr(shot_index, "_expires", 0)
+    monkeypatch.setattr(shot_index, "_refreshing", False)
+    monkeypatch.setattr(shot_index, "_read", lambda: ([{"stem": "new"}], "etag"))
+    monkeypatch.setattr(shot_index.threading, "Thread", lambda **kwargs: SimpleNamespace(start=lambda: started.append(kwargs["target"])))
+    assert shot_index.list_shots() == [{"stem": "old"}]
+    assert shot_index.list_shots() == [{"stem": "old"}]
+    assert len(started) == 1
+    started[0]()
+    assert shot_index.list_shots() == [{"stem": "new"}]
+
+
 def test_concurrent_manifest_update_retries_without_losing_other_shot(monkeypatch):
     existing = [{"stem": "a", "speed_kmh": 90}]
     writes = []

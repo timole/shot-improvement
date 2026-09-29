@@ -6,6 +6,7 @@ import threading
 import time
 import re
 import uuid
+import logging
 
 from azure.core import MatchConditions
 from azure.core.exceptions import ResourceNotFoundError, ResourceExistsError, ResourceModifiedError
@@ -17,6 +18,23 @@ NAME = "android/index.json"
 _lock = threading.Lock()
 _cached = None
 _expires = 0.0
+_refreshing = False
+
+
+def _refresh():
+    global _cached, _expires, _refreshing
+    try:
+        rows, _ = _read()
+        with _lock:
+            _cached = sorted(rows, key=lambda row: row["stem"], reverse=True)
+            _expires = time.monotonic() + 15
+    except Exception:
+        logging.getLogger(__name__).warning("Gallery refresh failed; serving previous index", exc_info=True)
+        with _lock:
+            _expires = time.monotonic() + 5
+    finally:
+        with _lock:
+            _refreshing = False
 
 
 def _read():
@@ -25,9 +43,12 @@ def _read():
 
 
 def list_shots():
-    global _cached, _expires
+    global _cached, _expires, _refreshing
     with _lock:
-        if _cached is not None and time.monotonic() < _expires:
+        if _cached is not None:
+            if time.monotonic() >= _expires and not _refreshing:
+                _refreshing = True
+                threading.Thread(target=_refresh, daemon=True, name="gallery-refresh").start()
             return _cached
         try:
             rows, _ = _read()
